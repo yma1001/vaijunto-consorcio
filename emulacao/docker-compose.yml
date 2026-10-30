@@ -1,0 +1,69 @@
+# Tres empresas, tres containers, tres volumes.
+# O volume da vaijunto NAO e o mesmo da sudoeste. se fosse o mesmo
+# arquivo pros tres, eu estaria fazendo armazenamento compartilhado,
+# e o enunciado proibe.
+#
+# Sobe da pasta emulacao:
+#   docker compose up --build
+#
+# No laboratorio, em PCs diferentes, nao usa este compose pronto.
+# Sobe um container em cada PC e troca PARES / URL_PROPRIA pelo IP
+# da placa de rede do outro computador. 127.0.0.1 so existe dentro
+# da propria maquina. Isso esta escrito no README.
+
+services:
+  vaijunto:
+    build:
+      context: ..
+      dockerfile: emulacao/Dockerfile
+    environment:
+      EMPRESA: vaijunto
+      REGIAO: reconcavo
+      PORTA: "5001"
+      HOST: 0.0.0.0
+      URL_PROPRIA: http://vaijunto:5001
+      PARES: sudoeste|http://sudoeste:5002,norteminas|http://norteminas:5003
+      ARQUIVO: /data/estado.json
+    ports:
+      - "5001:5001"
+    volumes:
+      - dados_vaijunto:/data
+
+  sudoeste:
+    build:
+      context: ..
+      dockerfile: emulacao/Dockerfile
+    environment:
+      EMPRESA: sudoeste
+      REGIAO: sudoeste
+      PORTA: "5002"
+      HOST: 0.0.0.0
+      URL_PROPRIA: http://sudoeste:5002
+      PARES: vaijunto|http://vaijunto:5001,norteminas|http://norteminas:5003
+      ARQUIVO: /data/estado.json
+    ports:
+      - "5002:5002"
+    volumes:
+      - dados_sudoeste:/data
+
+  norteminas:
+    build:
+      context: ..
+      dockerfile: emulacao/Dockerfile
+    environment:
+      EMPRESA: norteminas
+      REGIAO: norte-minas
+      PORTA: "5003"
+      HOST: 0.0.0.0
+      URL_PROPRIA: http://norteminas:5003
+      PARES: vaijunto|http://vaijunto:5001,sudoeste|http://sudoeste:5002
+      ARQUIVO: /data/estado.json
+    ports:
+      - "5003:5003"
+    volumes:
+      - dados_norteminas:/data
+
+volumes:
+  dados_vaijunto:
+  dados_sudoeste:
+  dados_norteminas:

@@ -1,0 +1,5 @@
+.git
+dados
+*.tmp
+*.exe
+**/__pycache__
