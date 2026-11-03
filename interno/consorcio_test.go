@@ -1070,3 +1070,93 @@ func TestReservasCruzadas(t *testing.T) {
 	}
 	checar(t, confirmou == 1, "uma reserva cruzada confirmou e a outra nao")
 }
+
+// Achar a carona desta empresa com esse destino.
+func idCarona(e *Estado, destino string) string {
+	e.Trava.Lock()
+	defer e.Trava.Unlock()
+	for _, c := range e.Caronas {
+		for _, t := range c.Trechos {
+			if NormalizarCidade(t.Destino) == NormalizarCidade(destino) {
+				return c.ID
+			}
+		}
+	}
+	return ""
+}
+
+// Falha ao gravar o cancelamento da oferta nao reativa uma carona que ja estava cancelada.
+func TestCancelarCaronaNaoReativa(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	e := tr.estado("vaijunto")
+	id := idCarona(e, "Cachoeira")
+	if id == "" {
+		t.Fatal("sem carona")
+	}
+	ocupado := filepath.Join(t.TempDir(), "ocupado")
+	if err := os.WriteFile(ocupado, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	original := e.Arquivo
+	e.Arquivo = filepath.Join(ocupado, "dados.json")
+	resp := e.CancelarCarona("motorista1", "senha123", id)
+	checar(t, !resp.OK, "a primeira gravacao falhou")
+	e.Trava.Lock()
+	status := e.Caronas[id].Status
+	e.Trava.Unlock()
+	checar(t, status == "ativa", "continua ativa")
+	e.Arquivo = original
+	busca := buscarRota(tr.url("vaijunto"), "Salvador", "Cachoeira")
+	checar(t, len(busca.Itinerarios) >= 1, "a busca ainda acha a oferta")
+
+	resp = e.CancelarCarona("motorista1", "senha123", id)
+	checar(t, resp.OK, "cancelou")
+	busca = buscarRota(tr.url("vaijunto"), "Salvador", "Cachoeira")
+	checar(t, len(busca.Itinerarios) == 0, "a oferta saiu da busca")
+
+	e.Arquivo = filepath.Join(ocupado, "dados.json")
+	resp = e.CancelarCarona("motorista1", "senha123", id)
+	checar(t, resp.OK, "cancelar de novo nao depende do disco")
+	e.Trava.Lock()
+	status = e.Caronas[id].Status
+	e.Trava.Unlock()
+	checar(t, status == "cancelada", "nao voltou a ativa")
+	e.Arquivo = original
+	busca = buscarRota(tr.url("vaijunto"), "Salvador", "Cachoeira")
+	checar(t, len(busca.Itinerarios) == 0, "o arquivo bom continua sem a oferta")
+}
+
+// Com uma empresa fora, o cancelamento fica em andamento. A listagem nao diz confirmada.
+func TestCancelamentoEmAndamento(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	busca := buscarRota(tr.url("vaijunto"), "Salvador", "Montes Claros")
+	caminho := acharCaminho(busca.Itinerarios)
+	if caminho == nil {
+		t.Fatal("sem caminho")
+	}
+	resp := reservar(tr.url("vaijunto"), "passageiro1", caminho)
+	checar(t, resp.OK && resp.Reserva != nil, "reservou a viagem inteira")
+	if resp.Reserva == nil {
+		return
+	}
+	tr.derrubarEmpresa("sudoeste")
+	var cancel Resposta
+	status, erro := Pedir("POST", tr.url("vaijunto")+"/cancelar-reserva", map[string]string{
+		"usuario": "passageiro1", "senha": "senha123", "id_reserva": resp.Reserva.ID,
+	}, 5*time.Second, &cancel)
+	checar(t, !erro && !cancel.OK && status == 202, "nao e recusa definitiva")
+	checar(t, strings.Contains(cancel.Erro, "em andamento"), "a mensagem diz que esta em andamento")
+	var lista Resposta
+	_, erro = PedirComo("GET", tr.url("vaijunto")+"/minhas-reservas?usuario=passageiro1", "passageiro1", "senha123", nil, 3*time.Second, &lista)
+	checar(t, !erro && lista.OK, "a listagem respondeu")
+	achei := false
+	for _, r := range lista.Reservas {
+		if r.ID == resp.Reserva.ID {
+			achei = true
+			checar(t, r.Status == "cancelando", "a listagem mostra cancelando")
+		}
+	}
+	checar(t, achei, "a reserva aparece na lista")
+}

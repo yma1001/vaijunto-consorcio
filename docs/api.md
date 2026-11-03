@@ -36,7 +36,7 @@ precos tem um numero por trecho (quantidade de cidades menos 1). Preco em reais,
 ```json
 {"usuario": "motorista1", "id_carona": "carona-vaijunto-1"}
 ```
-Recusa se ja tem passageiro confirmado na carona.
+Recusa se ja tem passageiro confirmado na carona. Se a oferta ja estava cancelada, responde 200 e nao grava de novo. Se o disco falhar na primeira vez, a oferta continua ativa.
 
 ### GET /minhas-caronas?usuario=motorista1
 
@@ -61,7 +61,7 @@ Cabecalho `Authorization: Basic` com o usuario e a senha. Sem isso, 401.
 {"usuario": "passageiro1", "senha": "senha123", "id_reserva": "reserva-vaijunto-4"}
 ```
 Manda desfazer em todas as empresas do itinerario. Chamar de novo nao devolve a vaga outra vez.
-Se uma empresa cair no meio, a resposta pode ser 400 e a listagem ainda mostrar a viagem confirmada. O pedido ficou em `cancelando`. Manda o mesmo POST outra vez. Quando todas responderem, a listagem passa a cancelada.
+Se uma empresa cair no meio, a resposta e 202 e o texto diz cancelamento em andamento. A listagem mostra `cancelando`, nao `confirmada`. A limpeza repete sozinha. Quando todas responderem, a listagem passa a `cancelada`. Chamar de novo tambem nao devolve a vaga outra vez.
 
 ## Empresa -> empresa
 

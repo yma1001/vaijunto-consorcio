@@ -825,7 +825,7 @@ func (e *Estado) Reservar(usuario, senha, idTentativa string, trechos []TrechoVi
 }
 
 // Grava cancelando, desfaz em todo mundo, e so entao marca cancelada.
-// Se alguem nao responder, a listagem ainda mostra a viagem confirmada.
+// Se alguem nao responder, a fase fica cancelando. A listagem mostra isso, nao confirmada.
 func (e *Estado) tentarCancelar(idPedido, idReserva string) (bool, string) {
 	e.Trava.Lock()
 	pedido := e.Pedidos[idPedido]
@@ -907,6 +907,13 @@ func (e *Estado) CancelarReserva(usuario, senha, idReserva string) Resposta {
 
 	conseguiu, motivo := e.tentarCancelar(idPedido, idReserva)
 	if !conseguiu {
+		e.Trava.Lock()
+		pedido := e.Pedidos[idPedido]
+		emAndamento := pedido != nil && pedido.Fase == "cancelando"
+		e.Trava.Unlock()
+		if emAndamento {
+			return Resposta{Codigo: 202, Erro: "cancelamento em andamento: " + motivo}
+		}
 		return Resposta{Erro: "nao consegui cancelar em: " + motivo}
 	}
 	e.Trava.Lock()

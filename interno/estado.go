@@ -455,7 +455,8 @@ func (e *Estado) PublicarCarona(usuario, senha string, cidades []string, data, h
 }
 
 // So o dono. Se ja tem passageiro confirmado nessa carona, recusa.
-// Nao desfaz reserva nas outras empresas.
+// Ja cancelada responde ok e nao mexe no arquivo.
+// Se o disco falhar, o status volta ao que era. Nao desfaz reserva nas outras empresas.
 func (e *Estado) CancelarCarona(usuario, senha, idCarona string) Resposta {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -470,6 +471,10 @@ func (e *Estado) CancelarCarona(usuario, senha, idCarona string) Resposta {
 	if c.Motorista != usuario {
 		return Resposta{Erro: "essa carona nao e sua"}
 	}
+	if c.Status == "cancelada" {
+		copia := copiarCarona(c)
+		return Resposta{OK: true, Carona: &copia}
+	}
 	for _, s := range e.Seguros {
 		if s.Estado != "confirmado" && s.Estado != "segurado" {
 			continue
@@ -480,13 +485,15 @@ func (e *Estado) CancelarCarona(usuario, senha, idCarona string) Resposta {
 			}
 		}
 	}
+	antes := c.Status
 	c.Status = "cancelada"
 	e.Relogio.Tic()
 	if err := e.Salvar(); err != nil {
-		c.Status = "ativa"
+		c.Status = antes
 		return Resposta{Erro: "nao consegui gravar"}
 	}
-	return Resposta{OK: true}
+	copia := copiarCarona(c)
+	return Resposta{OK: true, Carona: &copia}
 }
 
 // So o motorista. Devolve copia das caronas dele.
@@ -569,9 +576,15 @@ func (e *Estado) ListarMinhasReservas(usuario, senha string) Resposta {
 	}
 	lista := make([]Reserva, 0)
 	for _, r := range e.Reservas {
-		if r.Passageiro == usuario {
-			lista = append(lista, copiarReserva(r))
+		if r.Passageiro != usuario {
+			continue
 		}
+		copia := copiarReserva(r)
+		pedido := e.Pedidos[r.IDPedido]
+		if pedido != nil && pedido.Fase == "cancelando" {
+			copia.Status = "cancelando"
+		}
+		lista = append(lista, copia)
 	}
 	return Resposta{OK: true, Reservas: lista}
 }

@@ -248,13 +248,36 @@ func minhasCaronas(base, usuario, senha string) {
 		fmt.Println("nenhuma carona")
 		return
 	}
+	fmt.Println("ativas")
+	ativas := 0
 	for _, c := range resp.Caronas {
+		if c.Status == "cancelada" {
+			continue
+		}
+		ativas = ativas + 1
 		fmt.Println("---")
 		fmt.Println(c.ID, c.Status, c.Data, c.Hora)
 		fmt.Println(strings.Join(c.Cidades, " -> "), " vagas:", c.Vagas)
 		for _, t := range c.Trechos {
 			fmt.Println("   ", t.Origem, "->", t.Destino, "R$", t.Preco, "livres", t.VagasLivres)
 		}
+	}
+	if ativas == 0 {
+		fmt.Println("nenhuma")
+	}
+	fmt.Println("historico")
+	historico := 0
+	for _, c := range resp.Caronas {
+		if c.Status != "cancelada" {
+			continue
+		}
+		historico = historico + 1
+		fmt.Println("---")
+		fmt.Println(c.ID, "cancelada", c.Data, c.Hora)
+		fmt.Println(strings.Join(c.Cidades, " -> "))
+	}
+	if historico == 0 {
+		fmt.Println("nenhuma")
 	}
 }
 
@@ -350,7 +373,9 @@ func menuPassageiro(base, usuario, senha string) {
 		if op == "1" {
 			ultima = buscar(base)
 		} else if op == "2" {
-			reservarOpcao(base, usuario, senha, &chave, ultima)
+			if reservarOpcao(base, usuario, senha, &chave, ultima) {
+				ultima = nil
+			}
 		} else if op == "3" {
 			minhasReservas(base, usuario, senha)
 		} else if op == "4" {
@@ -393,15 +418,15 @@ func buscar(base string) []Itinerario {
 
 // Manda os trechos da opcao escolhida e guarda a chave da tentativa.
 // Se voltar 202, a mesma chave pergunta de novo. Nao e recusa.
-func reservarOpcao(base, usuario, senha string, chave *string, ultima []Itinerario) {
+func reservarOpcao(base, usuario, senha string, chave *string, ultima []Itinerario) bool {
 	if len(ultima) == 0 {
 		fmt.Println("busca primeiro")
-		return
+		return false
 	}
 	n, err := strconv.Atoi(lerLinha("numero da opcao: "))
 	if err != nil || n < 1 || n > len(ultima) {
 		fmt.Println("nao tem essa opcao")
-		return
+		return false
 	}
 	// mando os trechos de volta. o servidor confere a vaga de novo.
 	// se a tentativa anterior ainda nao fechou, repito a mesma chave.
@@ -419,23 +444,25 @@ func reservarOpcao(base, usuario, senha string, chave *string, ultima []Itinerar
 	}, 15*time.Second, &resp)
 	if erroRede {
 		fmt.Println("nao consegui falar com o servidor em " + base)
-		return
+		return false
 	}
 	if status == 202 {
 		fmt.Println("pendente. id do pedido:", resp.Mensagem)
 		fmt.Println("a proxima reserva repete esta chave")
-		return
+		return false
 	}
 	*chave = ""
 	if !resp.OK {
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
 		}
-		return
+		return false
 	}
 	if resp.Reserva != nil {
 		fmt.Println("reserva", resp.Reserva.ID, "confirmada. total R$", resp.Reserva.PrecoTotal)
 	}
+	fmt.Println("pra outra reserva, busca de novo")
+	return true
 }
 
 // Lista as reservas deste passageiro. A senha vai no Basic.
@@ -451,13 +478,27 @@ func minhasReservas(base, usuario, senha string) {
 		fmt.Println("nenhuma reserva")
 		return
 	}
-	for _, r := range resp.Reservas {
-		fmt.Println("---")
-		fmt.Println(r.ID, r.Status, "R$", r.PrecoTotal)
-		for _, t := range r.Trechos {
-			fmt.Println("   ", t.Origem, "->", t.Destino, "|", t.Empresa)
+	imprimirReservas := func(titulo, status string) {
+		fmt.Println(titulo)
+		n := 0
+		for _, r := range resp.Reservas {
+			if r.Status != status {
+				continue
+			}
+			n = n + 1
+			fmt.Println("---")
+			fmt.Println(r.ID, r.Status, "R$", r.PrecoTotal)
+			for _, t := range r.Trechos {
+				fmt.Println("   ", t.Origem, "->", t.Destino, "|", t.Empresa)
+			}
+		}
+		if n == 0 {
+			fmt.Println("nenhuma")
 		}
 	}
+	imprimirReservas("ativas", "confirmada")
+	imprimirReservas("cancelamento em andamento", "cancelando")
+	imprimirReservas("historico", "cancelada")
 }
 
 // Pede o id e manda POST /cancelar-reserva.
@@ -467,6 +508,11 @@ func cancelar(base, usuario, senha string) {
 	if !falar("POST", base+"/cancelar-reserva", map[string]string{
 		"usuario": usuario, "senha": senha, "id_reserva": id,
 	}, &resp) || !resp.OK {
+		if strings.Contains(resp.Erro, "em andamento") {
+			fmt.Println("cancelamento em andamento")
+			fmt.Println(resp.Erro)
+			return
+		}
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
 		}
