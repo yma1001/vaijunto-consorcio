@@ -147,7 +147,7 @@ O que o checklist pede, e qual teste mostra:
 
 Carga na apresentacao: `go run ./cmd/simulador 12`, com os tres servidores ja nas portas 5001–5003. O usuario muda a cada execucao. `SIM_EMPRESAS` troca o endereco, no formato `nome|url,nome|url`. A carona de Montes Claros nasce com 1 vaga. O resultado esperado e 1 confirmacao. O programa imprime `durou`.
 
-Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 11,1s) e `go test -race -count=1 ./...` (ok, 13,3s). Ainda falta repetir a queda no laboratorio, em tres computadores, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
+Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 11,1s) e `go test -race -count=1 ./...` (ok, 13,3s). Em 03/11/2026 os tres processos tambem rodaram em tres PCs (ladica09 vaijunto, ladica11 sudoeste, ladica12 norteminas): a busca, a reserva e a disputa da ultima vaga atravessaram a rede. Ainda falta derrubar um processo no meio da transacao, com os tres ligados, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
 
 ## 11. Emulacao
 
@@ -155,4 +155,4 @@ Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go 
 
 Na mesma maquina, eles se acham pelo nome do servico (`http://sudoeste:5002`). No laboratorio, um container por PC: troca `URL_PROPRIA` e `PARES` pelo IP da placa. `127.0.0.1` nao atravessa computador. `HOST=0.0.0.0` pra aceitar conexao de fora.
 
-Pra provocar a falha na apresentacao, da pasta `emulacao`: `docker compose stop sudoeste` (ou fechar o terminal dela, se estiver sem Docker). Mostrar que a busca Salvador -> Cachoeira na vaijunto ainda responde, e que reservar Salvador -> Montes Claros falha sem baixar `vagas_livres`. Religar: `docker compose start sudoeste`. Ela le o volume dela e `AoSubir` continua da fase gravada. Os tres PCs do laboratorio eu ainda nao liguei juntos. O artigo da SBC fica fora deste codigo.
+Pra provocar a falha na apresentacao, da pasta `emulacao`: `docker compose stop sudoeste` (ou fechar o terminal dela, se estiver sem Docker). Mostrar que a busca Salvador -> Cachoeira na vaijunto ainda responde, e que reservar Salvador -> Montes Claros falha sem baixar `vagas_livres` quando a queda e antes da decisao gravada. Religar: `docker compose start sudoeste`, ou o mesmo processo no mesmo arquivo. Ela le o arquivo dela e `AoSubir` continua da fase gravada. Em 03/11/2026 liguei os tres PCs por processo, sem Docker, e a reserva entre eles funcionou. A queda no meio da transacao, nesses tres PCs, eu ainda nao fiz. O artigo da SBC fica fora deste codigo. O passo a passo esta no README.
