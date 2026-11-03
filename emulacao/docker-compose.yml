@@ -9,7 +9,8 @@
 # No laboratorio, em PCs diferentes, nao usa este compose pronto.
 # Sobe um container em cada PC e troca PARES / URL_PROPRIA pelo IP
 # da placa de rede do outro computador. 127.0.0.1 so existe dentro
-# da propria maquina. Isso esta escrito no README.
+# da propria maquina. SEGREDO e o mesmo nos tres, e nao e a senha
+# das contas. Isso esta escrito no README.
 
 services:
   vaijunto:
@@ -25,6 +26,7 @@ services:
       URL_PROPRIA: http://vaijunto:5001
       PARES: sudoeste|http://sudoeste:5002,norteminas|http://norteminas:5003
       ARQUIVO: /data/estado.json
+      SEGREDO: segredo-lab
     ports:
       - "5001:5001"
     volumes:
@@ -43,6 +45,7 @@ services:
       URL_PROPRIA: http://sudoeste:5002
       PARES: vaijunto|http://vaijunto:5001,norteminas|http://norteminas:5003
       ARQUIVO: /data/estado.json
+      SEGREDO: segredo-lab
     ports:
       - "5002:5002"
     volumes:
@@ -61,6 +64,7 @@ services:
       URL_PROPRIA: http://norteminas:5003
       PARES: vaijunto|http://vaijunto:5001,sudoeste|http://sudoeste:5002
       ARQUIVO: /data/estado.json
+      SEGREDO: segredo-lab
     ports:
       - "5003:5003"
     volumes:

@@ -22,6 +22,8 @@ Senha: senha123
 
 Cada empresa tem a propria lista. O nome repetido e so pra demo.
 
+O valor `SEGREDO` e outro. Ele vai no cabecalho das rotas entre empresas (segurar, confirmar, desfazer). Nao e esta senha. Sem a variavel, o servidor para na hora. As tres maquinas usam o mesmo valor. Quem souber esse valor pode mandar o nome de outra empresa no usuario: o servidor compara o nome com a coordenadora gravada no pedido, e nao olha de qual maquina veio o pacote.
+
 Data das caronas prontas: 30/10/2026
 
 ## Rodar no Windows (tres terminais)
@@ -37,6 +39,7 @@ $env:PORTA="5001"
 $env:URL_PROPRIA="http://127.0.0.1:5001"
 $env:PARES="sudoeste|http://127.0.0.1:5002,norteminas|http://127.0.0.1:5003"
 $env:ARQUIVO="dados/vaijunto.json"
+$env:SEGREDO="segredo-lab"
 go run ./cmd/servidor
 ```
 
@@ -49,6 +52,7 @@ $env:PORTA="5002"
 $env:URL_PROPRIA="http://127.0.0.1:5002"
 $env:PARES="vaijunto|http://127.0.0.1:5001,norteminas|http://127.0.0.1:5003"
 $env:ARQUIVO="dados/sudoeste.json"
+$env:SEGREDO="segredo-lab"
 go run ./cmd/servidor
 ```
 
@@ -61,6 +65,7 @@ $env:PORTA="5003"
 $env:URL_PROPRIA="http://127.0.0.1:5003"
 $env:PARES="vaijunto|http://127.0.0.1:5001,sudoeste|http://127.0.0.1:5002"
 $env:ARQUIVO="dados/norteminas.json"
+$env:SEGREDO="segredo-lab"
 go run ./cmd/servidor
 ```
 
@@ -99,7 +104,7 @@ docker compose up --build
 
 Cada container tem o seu volume. Nao compartilham arquivo.
 
-No laboratorio, em computadores diferentes: um processo (ou um container) por PC. Em cada um, `URL_PROPRIA` e o IP da propria placa, e `PARES` leva o IP dos outros dois. A porta publicada tem que ser a mesma que esta na URL. O volume (ou o `ARQUIVO`) fica no disco daquele PC. `127.0.0.1` nao atravessa a rede. O simulador, se rodar de um quarto PC, usa `SIM_EMPRESAS=vaijunto|http://IP1:5001,sudoeste|http://IP2:5002,norteminas|http://IP3:5003`.
+No laboratorio, em computadores diferentes: um processo (ou um container) por PC. Em cada um, `URL_PROPRIA` e o IP da propria placa, e `PARES` leva o IP dos outros dois. A porta publicada tem que ser a mesma que esta na URL. O volume (ou o `ARQUIVO`) fica no disco daquele PC. `127.0.0.1` nao atravessa a rede. `SEGREDO` e o mesmo texto nos tres PCs, e nao e a senha das contas. O simulador, se rodar de um quarto PC, usa `SIM_EMPRESAS=vaijunto|http://IP1:5001,sudoeste|http://IP2:5002,norteminas|http://IP3:5003`.
 
 Eu nao rodei essa cena em tres computadores. Os testes daqui sao na mesma maquina.
 

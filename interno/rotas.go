@@ -183,6 +183,16 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ok, motivo := e.TratarSegurar(corpo)
+		if ok && e.CortarAckSegurar {
+			hj, pode := w.(http.Hijacker)
+			if pode {
+				conn, _, err := hj.Hijack()
+				if err == nil {
+					conn.Close()
+					return
+				}
+			}
+		}
 		if ok {
 			responder(w, 200, Resposta{OK: true, Mensagem: motivo})
 			return
@@ -252,11 +262,7 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (e *Estado) quemAutenticou(r *http.Request) (string, int) {
 	user, senha, ok := r.BasicAuth()
-	segredo := e.Segredo
-	if segredo == "" {
-		segredo = "senha123"
-	}
-	if !ok || senha != segredo || e.urlDa(user) == "" {
+	if !ok || e.Segredo == "" || senha != e.Segredo || e.urlDa(user) == "" {
 		return "", 401
 	}
 	return user, 200
@@ -417,7 +423,12 @@ func Rodar() {
 		time.Duration(janelaMs)*time.Millisecond,
 		time.Duration(timeoutSeg)*time.Second,
 	)
-	e.Segredo = getenv("SEGREDO", "senha123")
+	segredo := strings.TrimSpace(os.Getenv("SEGREDO"))
+	if segredo == "" {
+		fmt.Println("falta a variavel SEGREDO. ela nao e a senha das contas")
+		os.Exit(1)
+	}
+	e.Segredo = segredo
 	err = e.CarregarOuSemear()
 	if err != nil {
 		fmt.Println("nao consegui abrir o arquivo:", err)

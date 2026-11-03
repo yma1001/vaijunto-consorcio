@@ -8,7 +8,7 @@ Tem dois tipos de conversa.
 Tudo e JSON UTF-8. Se o JSON vier quebrado, a resposta e 400 e nada e gravado.
 Codigo HTTP: 200 deu certo, 400 pedido torto, 401 senha errada, 404 nao achei, 409 sem vaga ou conflito.
 
-Nao tem token de sessao. A senha da conta vai no corpo do POST, ou no cabecalho Authorization (HTTP Basic) nas listagens. Ela nao vai na URL. Entre as empresas, segurar, confirmar e desfazer tambem pedem Basic: o usuario e o nome da empresa e a senha e a variavel SEGREDO (padrao senha123). So a coordenadora gravada naquele pedido passa.
+Nao tem token de sessao. A senha da conta vai no corpo do POST, ou no cabecalho Authorization (HTTP Basic) nas listagens. Ela nao vai na URL. Entre as empresas, segurar, confirmar e desfazer pedem outro Basic: o usuario e o nome da empresa e a senha e a variavel SEGREDO. Sem essa variavel o servidor nao sobe. SEGREDO nao e a senha das contas (senha123). So a coordenadora gravada naquele pedido passa. O mesmo SEGREDO nas tres maquinas nao prova de qual maquina saiu o pacote: quem souber o valor pode colocar o nome de outra empresa no usuario.
 
 ## Aplicativo -> a propria empresa
 
@@ -98,14 +98,14 @@ Ainda nao baixa a vaga. So marca segurado, se ganhar na janela do relogio.
   "trechos": [{"id_carona": "carona-norteminas-1", "indice": 0}]
 }
 ```
-200 se segurou. 409 se nao tem vaga. O cabecalho Basic tem que ser da empresa_coord.
+200 se segurou. 409 se nao tem vaga. O cabecalho Basic tem que ser da empresa_coord, com SEGREDO. A senha da conta nao serve.
 
 ### POST /consorcio/confirmar
 Cabecalho Basic da coordenadora. Corpo:
 ```json
 {"id_pedido": "pedido-vaijunto-3", "relogio": 1, "empresa": "vaijunto"}
 ```
-Agora baixa vagas_livres. Se esse id ja estava confirmado, responde 200 e nao baixa de novo. Outra empresa, mesmo com a senha do consorcio, recebe 403.
+Agora baixa vagas_livres. Se esse id ja estava confirmado, responde 200 e nao baixa de novo. Outra empresa, mesmo com SEGREDO, recebe 403. A senha da conta recebe 401.
 
 ### POST /consorcio/desfazer
 Cabecalho Basic da coordenadora. Corpo:
@@ -158,6 +158,8 @@ vaijunto grava abortada
 passageiro recebe erro
 nenhuma vaga_livres foi baixada
 ```
+
+Se a gravacao de abortando falhar, a fase volta a segurando e ninguem recebe desfazer ainda. Quando o disco aceita de novo, o mesmo processo aborta, sem reiniciar.
 
 Se o confirmar da norteminas grava a vaga e a resposta se perde:
 

@@ -20,7 +20,7 @@ import (
 // Depois que gravei "confirmando", nao aborto mais. So repito o confirmar.
 // Voto ja segurado nao olha o prazo. O prazo so vale enquanto esta esperando.
 // Se eu nao conseguir gravar a decisao, marco o pedido e aborto quando o disco voltar.
-// Nao mando desfazer antes de gravar esse aborto.
+// A mesma lista vale quando a escrita de abortando falha. Nao mando desfazer antes de gravar esse aborto.
 //
 // A ordem alfabetica evita deadlock: todo mundo pede norteminas,
 // depois sudoeste, depois vaijunto. Ninguem segura A esperando B
@@ -441,6 +441,14 @@ func (e *Estado) gravarFase(id, nova string) error {
 	return nil
 }
 
+// chamar com a trava na mao.
+func (e *Estado) marcarAbandonado(id string) {
+	if e.Abandonados == nil {
+		e.Abandonados = map[string]bool{}
+	}
+	e.Abandonados[id] = true
+}
+
 func (e *Estado) AbortarPedido(idPedido string) {
 	e.Trava.Lock()
 	pedido := e.Pedidos[idPedido]
@@ -450,10 +458,12 @@ func (e *Estado) AbortarPedido(idPedido string) {
 	}
 	participantes := append([]Par(nil), pedido.Participantes...)
 	err := e.gravarFase(idPedido, "abortando")
-	e.Trava.Unlock()
 	if err != nil {
+		e.marcarAbandonado(idPedido)
+		e.Trava.Unlock()
 		return
 	}
+	e.Trava.Unlock()
 
 	for _, p := range participantes {
 		ok, rede, motivo := e.desfazerNa(p.Empresa, idPedido)
@@ -730,10 +740,7 @@ func (e *Estado) Reservar(usuario, senha, idTentativa string, trechos []TrechoVi
 		// a preparacao ja terminou, mas a decisao nao entrou no disco.
 		// marco so este pedido. o laco aborta quando a escrita voltar.
 		// um segurando que ainda esta na rede nao entra neste mapa.
-		if e.Abandonados == nil {
-			e.Abandonados = map[string]bool{}
-		}
-		e.Abandonados[idPedido] = true
+		e.marcarAbandonado(idPedido)
 		e.Trava.Unlock()
 		e.AbortarPedido(idPedido)
 		return Resposta{Erro: "nao consegui gravar a confirmacao"}

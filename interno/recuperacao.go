@@ -71,8 +71,9 @@ func retomarPendentes(e *Estado) {
 	}
 }
 
-// Pedido que terminou de segurar e nao gravou a decisao.
-// Nao olho todo segurando: tem reserva saudavel no meio da rede.
+// Pedido que ja devia abortar, mas a escrita nao entrou.
+// Vale para confirmando e para abortando. Nao olho todo segurando:
+// tem reserva saudavel no meio da rede.
 func retomarAbandonados(e *Estado) {
 	e.Trava.Lock()
 	ids := make([]string, 0)

@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+const segredoTeste = "segredo-lab"
+
 func checar(t *testing.T, ok bool, msg string) {
 	t.Helper()
 	if ok {
@@ -45,6 +47,7 @@ func subirTrio(t *testing.T, expira, janela, timeout time.Duration) *trio {
 	tr := &trio{mortos: map[string]bool{}}
 	for _, n := range nomes {
 		e := NovoEstado(n.empresa, n.regiao, filepath.Join(pasta, n.empresa+".json"), "", nil, expira, janela, timeout)
+		e.Segredo = segredoTeste
 		ln, err := Abrir(e, "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -290,7 +293,7 @@ func TestSeguroExpira(t *testing.T) {
 		Trechos: []RefTrecho{{IDCarona: trecho.IDCarona, Indice: trecho.Indice}},
 	}
 	var resp Resposta
-	_, erro = PedirComo("POST", tr.url("norteminas")+"/consorcio/segurar", "vaijunto", "senha123", corpo, 4*time.Second, &resp)
+	_, erro = PedirComo("POST", tr.url("norteminas")+"/consorcio/segurar", "vaijunto", segredoTeste, corpo, 4*time.Second, &resp)
 	checar(t, !erro && resp.OK, "segurou")
 	checar(t, vaga(t, tr.url("norteminas"), "Vitória da Conquista", "Montes Claros") == 0, "enquanto segurado a vaga some da busca")
 	time.Sleep(2200 * time.Millisecond)
@@ -356,6 +359,7 @@ func (tr *trio) reiniciar(t *testing.T, empresa string) {
 		tr.srvs[i].Shutdown(ctx)
 		cancel()
 		novo := NovoEstado(empresa, regiao, arquivo, url, pares, expira, janela, timeout)
+		novo.Segredo = e.Segredo
 		if err := novo.CarregarOuSemear(); err != nil {
 			t.Fatal(err)
 		}
@@ -608,7 +612,7 @@ func TestGravacaoFalha(t *testing.T) {
 		Trechos:      []RefTrecho{{IDCarona: cachoeira.IDCarona, Indice: cachoeira.Indice}},
 	}
 	var segurou Resposta
-	_, erroRede := PedirComo("POST", tr.url("vaijunto")+"/consorcio/segurar", "vaijunto", "senha123", corpo, 4*time.Second, &segurou)
+	_, erroRede := PedirComo("POST", tr.url("vaijunto")+"/consorcio/segurar", "vaijunto", segredoTeste, corpo, 4*time.Second, &segurou)
 	checar(t, !erroRede && segurou.OK, "segurou para testar o desfazer")
 	e.Arquivo = filepath.Join(original, "nao.json")
 	ok, _ := e.TratarDesfazer("pedido-grava", "vaijunto")
@@ -639,7 +643,7 @@ func TestCoordenadorMudo(t *testing.T) {
 		Trechos:      []RefTrecho{{IDCarona: trecho.IDCarona, Indice: trecho.Indice}},
 	}
 	var segurou Resposta
-	_, erro := PedirComo("POST", tr.url("norteminas")+"/consorcio/segurar", "vaijunto", "senha123", corpo, 4*time.Second, &segurou)
+	_, erro := PedirComo("POST", tr.url("norteminas")+"/consorcio/segurar", "vaijunto", segredoTeste, corpo, 4*time.Second, &segurou)
 	checar(t, !erro && segurou.OK, "a norteminas segurou")
 	tr.derrubarEmpresa("vaijunto")
 	time.Sleep(2 * time.Second)
@@ -687,6 +691,44 @@ func TestDiscoVoltaSemReiniciar(t *testing.T) {
 	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 1, "nao vendeu de novo")
 }
 
+func TestAbortoDiscoVolta(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	var lista Resposta
+	Pedir("GET", tr.url("norteminas")+"/consorcio/trechos?data=2026-10-30", nil, 3*time.Second, &lista)
+	if len(lista.Trechos) == 0 {
+		t.Fatal("sem trecho")
+	}
+	tr.estado("norteminas").CortarAckSegurar = true
+	tr.estado("vaijunto").FalharSeFase = "abortando"
+	var resp Resposta
+	status, erro := Pedir("POST", tr.url("vaijunto")+"/reservar", map[string]any{
+		"usuario":      "passageiro1",
+		"senha":        "senha123",
+		"id_tentativa": "aborto-1",
+		"trechos":      []TrechoViagem{lista.Trechos[0]},
+	}, 8*time.Second, &resp)
+	checar(t, !erro && !resp.OK && status != 202, "a resposta do segurar se perdeu e o aborto nao gravou")
+	limite := time.Now().Add(5 * time.Second)
+	for time.Now().Before(limite) && tr.fase("vaijunto", "passageiro1") == "segurando" {
+		time.Sleep(200 * time.Millisecond)
+	}
+	checar(t, tr.fase("vaijunto", "passageiro1") == "abortada", "o aborto entrou quando o disco voltou")
+	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 1, "a vaga bruta voltou")
+	checar(t, vaga(t, tr.url("norteminas"), "Vitória da Conquista", "Montes Claros") == 1, "a vaga voltou a ser oferecida")
+	var deNovo Resposta
+	status, _ = Pedir("POST", tr.url("vaijunto")+"/reservar", map[string]any{
+		"usuario":      "passageiro1",
+		"senha":        "senha123",
+		"id_tentativa": "aborto-1",
+		"trechos":      []TrechoViagem{lista.Trechos[0]},
+	}, 5*time.Second, &deNovo)
+	checar(t, !deNovo.OK && status != 202, "a mesma chave nao fica pendente")
+	for _, emp := range []string{"vaijunto", "sudoeste", "norteminas"} {
+		esperarSaude(t, tr.url(emp))
+	}
+}
+
 func TestDesfazerSoCoordenador(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
 	defer tr.derrubar()
@@ -705,31 +747,28 @@ func TestDesfazerSoCoordenador(t *testing.T) {
 	var ruim Resposta
 	status, _ := Pedir("POST", tr.url("norteminas")+"/consorcio/desfazer", corpo, 3*time.Second, &ruim)
 	checar(t, status == 401, "sem credencial nao desfaz")
-	status, _ = PedirComo("POST", tr.url("norteminas")+"/consorcio/desfazer", "sudoeste", "senha123", corpo, 3*time.Second, &ruim)
+	status, _ = PedirComo("POST", tr.url("norteminas")+"/consorcio/desfazer", "vaijunto", "senha123", corpo, 3*time.Second, &ruim)
+	checar(t, status == 401, "a senha da conta nao vale entre empresas")
+	status, _ = PedirComo("POST", tr.url("norteminas")+"/consorcio/desfazer", "sudoeste", segredoTeste, corpo, 3*time.Second, &ruim)
 	checar(t, status == 403, "outra empresa nao desfaz")
 	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 0, "a vaga continua vendida")
 	var ok Resposta
-	status, _ = PedirComo("POST", tr.url("norteminas")+"/consorcio/confirmar", "vaijunto", "senha123", map[string]any{
+	status, _ = PedirComo("POST", tr.url("norteminas")+"/consorcio/confirmar", "vaijunto", segredoTeste, map[string]any{
 		"id_pedido": id, "empresa": "vaijunto", "relogio": 1,
 	}, 3*time.Second, &ok)
 	checar(t, status == 200 && ok.OK, "a coordenadora repete o confirmar")
 	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 0, "repetir nao devolve a vaga")
 }
 
-func estadoQuieto(tr *trio, empresa string) string {
+func estadoSemPendencia(tr *trio, empresa string) string {
 	e := tr.estado(empresa)
 	if e == nil {
 		return "sem estado"
 	}
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
-	for _, r := range e.Reservas {
-		if r.Status == "confirmada" {
-			return "reserva confirmada"
-		}
-	}
 	for _, s := range e.Seguros {
-		if s.Estado == "segurado" || s.Estado == "esperando" || s.Estado == "confirmado" {
+		if s.Estado == "segurado" || s.Estado == "esperando" {
 			return "seguro " + s.Estado
 		}
 	}
@@ -739,6 +778,37 @@ func estadoQuieto(tr *trio, empresa string) string {
 		}
 	}
 	return ""
+}
+
+func temAndamento(tr *trio) bool {
+	for _, e := range tr.estados {
+		e.Trava.Lock()
+		n := len(e.Pedidos) + len(e.Seguros)
+		e.Trava.Unlock()
+		if n > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func titularesDoTrecho(tr *trio, origem, destino string) []string {
+	var nomes []string
+	for _, e := range tr.estados {
+		e.Trava.Lock()
+		for _, r := range e.Reservas {
+			if r.Status != "confirmada" {
+				continue
+			}
+			for _, trecho := range r.Trechos {
+				if NormalizarCidade(trecho.Origem) == NormalizarCidade(origem) && NormalizarCidade(trecho.Destino) == NormalizarCidade(destino) {
+					nomes = append(nomes, r.Passageiro)
+				}
+			}
+		}
+		e.Trava.Unlock()
+	}
+	return nomes
 }
 
 func TestCargaComQueda(t *testing.T) {
@@ -780,7 +850,10 @@ func TestCargaComQueda(t *testing.T) {
 			}(emp, i)
 		}
 	}
-	time.Sleep(30 * time.Millisecond)
+	limiteAnda := time.Now().Add(1500 * time.Millisecond)
+	for time.Now().Before(limiteAnda) && !temAndamento(tr) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	tr.derrubarEmpresa("sudoeste")
 	for i := 0; i < 18; i++ {
 		<-fim
@@ -790,7 +863,7 @@ func TestCargaComQueda(t *testing.T) {
 	for time.Now().Before(limite) {
 		limpo := true
 		for _, emp := range empresas {
-			if estadoQuieto(tr, emp) != "" {
+			if estadoSemPendencia(tr, emp) != "" {
 				limpo = false
 			}
 		}
@@ -800,9 +873,23 @@ func TestCargaComQueda(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 	}
 	for _, emp := range empresas {
-		checar(t, estadoQuieto(tr, emp) == "", emp+" ficou sem reserva, preparacao ou pedido pendente")
+		checar(t, estadoSemPendencia(tr, emp) == "", emp+" ficou sem preparacao ou pedido pendente")
 	}
-	checar(t, vagaBruta(tr, "vaijunto", "Salvador", "Feira de Santana") == antesFeira, "saldo da vaijunto voltou")
-	checar(t, vagaBruta(tr, "sudoeste", "Feira de Santana", "Vitória da Conquista") == antesSul, "saldo da sudoeste voltou")
-	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == antesNorte, "saldo da norteminas voltou")
+	type trechoSaldo struct {
+		empresa, origem, destino string
+		antes                    int
+	}
+	saldos := []trechoSaldo{
+		{"vaijunto", "Salvador", "Feira de Santana", antesFeira},
+		{"sudoeste", "Feira de Santana", "Vitória da Conquista", antesSul},
+		{"norteminas", "Vitória da Conquista", "Montes Claros", antesNorte},
+	}
+	for _, s := range saldos {
+		agora := vagaBruta(tr, s.empresa, s.origem, s.destino)
+		nomes := titularesDoTrecho(tr, s.origem, s.destino)
+		checar(t, agora == s.antes-len(nomes), s.empresa+" saldo bate com os titulares")
+		for _, nome := range nomes {
+			checar(t, nome != "", s.empresa+" tem titular na vaga vendida")
+		}
+	}
 }

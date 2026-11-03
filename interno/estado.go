@@ -152,6 +152,7 @@ type Estado struct {
 	Contador           int
 	Ligado             bool
 	CortarAckConfirmar bool
+	CortarAckSegurar   bool
 	FalharSeFase       string
 	Segredo            string
 	Abandonados        map[string]bool
@@ -177,7 +178,6 @@ func NovoEstado(empresa, regiao, arquivo, urlPropria string, pares []Par, expira
 		Pedidos:     map[string]*Pedido{},
 		Contador:    1,
 		Ligado:      true,
-		Segredo:     "senha123",
 		Abandonados: map[string]bool{},
 	}
 }

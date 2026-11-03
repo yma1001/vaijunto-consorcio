@@ -111,6 +111,8 @@ Ao voltar, `Rodar` carrega o arquivo, sobe a limpeza e chama `AoSubir` (`interno
 - `abortando` ou `cancelando`: repete ate todo mundo responder. So entao grava `abortada` ou `cancelada`
 - `confirmada`: nao mexe
 
+Se a escrita de `abortando` falha, a fase volta a `segurando` e o desfazer nao sai. O laco de limpeza tenta esse pedido de novo quando o disco aceita, sem reiniciar o processo.
+
 Seguro `esperando` vencido: solta, porque a vaga ainda nao foi prometida. Seguro `segurado` vencido: pergunta `GET /consorcio/pedido` no coordenador. `confirmado` confirma. `abortado` ou `desconhecido` solta. Se o coordenador nao responder, espera. Nao solta no silencio.
 
 ## 10. Testes
@@ -132,12 +134,13 @@ Automatizado: `go test ./interno -count=1`
 | `TestGravacaoFalha` | se o disco falha, a fase na memoria volta e o arquivo antigo fica |
 | `TestCoordenadorMudo` | voto prometido fica preso se o coordenador cai; outra empresa ainda reserva |
 | `TestDiscoVoltaSemReiniciar` | falhou ao gravar a decisao: o pedido aborta quando o disco volta, sem reiniciar |
-| `TestDesfazerSoCoordenador` | sem credencial 401, outra empresa 403, a coordenadora repete o confirmar |
-| `TestCargaComQueda` | 18 passageiros, a sudoeste cai na preparacao e volta: tres JSON sem pendencia e saldo inicial |
+| `TestAbortoDiscoVolta` | resposta do segurar se perde e a escrita de abortando falha: a vaga volta com os tres processos vivos |
+| `TestDesfazerSoCoordenador` | sem credencial 401, senha da conta 401, outra empresa 403, a coordenadora repete o confirmar |
+| `TestCargaComQueda` | 18 passageiros, a sudoeste cai no meio e volta: sem pendencia, e o saldo de cada trecho bate com os titulares |
 
 Carga: `go run ./cmd/simulador 12`, com os tres servidores ja nas portas 5001–5003. O usuario muda a cada execucao. `SIM_EMPRESAS` troca o endereco, no formato `nome|url,nome|url`. A carona de Montes Claros nasce com 1 vaga. O resultado esperado e 1 confirmacao.
 
-Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 10,5s) e `go test -race -count=1 ./...` (ok, 11,8s). Ainda falta repetir a queda no laboratorio, em tres computadores, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
+Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 10,0s) e `go test -race -count=1 ./...` (ok, 13,3s). Ainda falta repetir a queda no laboratorio, em tres computadores, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
 
 ## 11. Emulacao
 
