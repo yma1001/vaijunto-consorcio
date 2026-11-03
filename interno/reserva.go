@@ -25,10 +25,13 @@ import (
 // A ordem alfabetica evita deadlock: todo mundo pede norteminas,
 // depois sudoeste, depois vaijunto. Ninguem segura A esperando B
 // enquanto o outro segura B esperando A.
+// Quem perde desfaz o que ja segurou e para. Nao fica tentando de novo.
 //
 // Ultima vaga: o dono espera a janela (sem a trava na mao, senao o
 // segundo pedido nem entra) e ordena por (relogio, empresa, id).
 // Menor ganha. Nao e quem o socket leu primeiro.
+// Quem chega depois que o outro ja ficou segurado nao toma a vaga,
+// mesmo com carimbo menor. A janela so cobre o atraso curto.
 
 type CorpoSegurar struct {
 	IDPedido      string      `json:"id_pedido"`

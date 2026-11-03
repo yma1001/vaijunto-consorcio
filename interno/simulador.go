@@ -62,6 +62,7 @@ func RodarSimulador() {
 	pronto.Add(quantidade)
 	fim.Add(quantidade)
 	marca := fmt.Sprintf("%d", time.Now().UnixNano())
+	inicio := time.Now()
 
 	for i := 0; i < quantidade; i++ {
 		go func(i int) {
@@ -92,6 +93,7 @@ func RodarSimulador() {
 
 	fmt.Println()
 	fmt.Println("cadastro", cadastro, "busca", busca, "confirma", confirma, "recusa", recusa, "timeout", timeout)
+	fmt.Println("durou", time.Since(inicio).Round(time.Millisecond))
 	fmt.Println("se deu mais de uma confirma e a vaga de Montes Claros era 1, olha a atomicidade")
 }
 

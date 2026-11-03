@@ -11,6 +11,7 @@ import (
 
 // Pedir fala HTTP com outra empresa ou com o servidor, a partir do cliente.
 // O bool true no fim significa queda: timeout, conexao recusada, cabo.
+// Processo morto e falha no meio da rede chegam iguais. Nao separo os dois.
 // Isso e diferente de um 409, que e a outra empresa viva dizendo que nao tem vaga.
 func Pedir(metodo, url string, corpo any, timeout time.Duration, destino any) (int, bool) {
 	return pedir(metodo, url, "", "", corpo, timeout, destino)

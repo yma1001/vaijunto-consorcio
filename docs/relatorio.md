@@ -34,7 +34,7 @@ Repetir a mesma requisicao:
 - `confirmar` de um id ja confirmado responde ok e nao baixa `vagas_livres` de novo (`TratarConfirmar`)
 - `desfazer` de um id ja abortado responde ok e nao devolve a vaga outra vez (`TratarDesfazer`)
 
-Sem resposta, o coordenador trata como falha daquela empresa e aborta o pedido (`AbortarPedido`).
+Sem resposta no `segurar`, o coordenador trata como falha daquela empresa e aborta o pedido (`AbortarPedido`). Sem resposta no `confirmar`, depois que a fase `confirmando` ja esta no disco, nao aborta: fica pendente e repete (`entregarConfirmacao`). O id da transacao e o `id_pedido`. Repetir o confirmar nao baixa a vaga outra vez.
 
 ## 3. Busca distribuida
 
@@ -82,11 +82,11 @@ Dois passageiros podem pedir os mesmos trechos em ordens diferentes. Sem uma ord
 
 `agruparPorEmpresa` ordena o nome (`sort.Strings`). Todo coordenador pede norteminas, depois sudoeste, depois vaijunto. O segundo encontra a vaga ocupada e desiste, em vez de segurar o proximo e esperar.
 
-Consequencia no desempenho: os `segurar` vao um depois do outro. Uma reserva de tres empresas espera a soma das janelas mais a rede. A `Trava` local nao fica segurada durante o HTTP nem durante o `Sleep`.
+Consequencia: os `segurar` vao um depois do outro. Uma reserva de tres empresas espera a soma das janelas mais a rede. Quem perde a vaga aborta o que ja segurou. Ele para. Nao tenta de novo em loop, senao viraria livelock. A `Trava` local nao fica segurada durante o HTTP nem durante o `Sleep`.
 
 ## 8. Tolerancia a falhas
 
-A falha e timeout em `Pedir` (`TIMEOUT_SEGUNDOS`, padrao 3). Nao tem detector central.
+A falha e timeout em `Pedir` (`TIMEOUT_SEGUNDOS`, padrao 3). Nao tem detector central. Processo morto e cabo partido chegam do mesmo jeito. Nao da pra separar os dois olhando so o timeout.
 
 Antes da confirmacao: a busca nao grava nada. Se o cliente fecha, nao existe pedido.
 
@@ -138,9 +138,16 @@ Automatizado: `go test ./interno -count=1`
 | `TestDesfazerSoCoordenador` | sem credencial 401, senha da conta 401, outra empresa 403, a coordenadora repete o confirmar |
 | `TestCargaComQueda` | 18 passageiros, a sudoeste cai no meio e volta: sem pendencia, e o saldo de cada trecho bate com os titulares |
 
-Carga: `go run ./cmd/simulador 12`, com os tres servidores ja nas portas 5001–5003. O usuario muda a cada execucao. `SIM_EMPRESAS` troca o endereco, no formato `nome|url,nome|url`. A carona de Montes Claros nasce com 1 vaga. O resultado esperado e 1 confirmacao.
+O que o checklist pede, e qual teste mostra:
 
-Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 10,0s) e `go test -race -count=1 ./...` (ok, 13,3s). Ainda falta repetir a queda no laboratorio, em tres computadores, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
+- venda dupla do mesmo assento: `TestDisputaSimultanea` e `TestMesmaTentativa`. Tem que sobrar um so.
+- reserva confirmada pela metade: `TestAckPerdido` e `TestCargaComQueda`. No fim nao fica fase `confirmando` sem reserva, nem vaga baixada sem titular.
+- assento bloqueado depois da queda e da volta: `TestEmpresaCai`, `TestCargaComQueda`, `TestDiscoVoltaSemReiniciar` e `TestAbortoDiscoVolta`.
+- desempenho: a suite inteira, nesta maquina, `go test ./interno -count=1` em 11,1s e `go test -race -count=1 ./...` em 13,3s. O simulador imprime a duracao da carga quando roda na hora.
+
+Carga na apresentacao: `go run ./cmd/simulador 12`, com os tres servidores ja nas portas 5001–5003. O usuario muda a cada execucao. `SIM_EMPRESAS` troca o endereco, no formato `nome|url,nome|url`. A carona de Montes Claros nasce com 1 vaga. O resultado esperado e 1 confirmacao. O programa imprime `durou`.
+
+Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 11,1s) e `go test -race -count=1 ./...` (ok, 13,3s). Ainda falta repetir a queda no laboratorio, em tres computadores, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
 
 ## 11. Emulacao
 
