@@ -292,7 +292,7 @@ No laboratorio de 03/11/2026 nao usei Docker. Foi um processo por PC, com os IPs
 
 ## Na apresentacao
 
-O texto dos 11 pontos do barema esta em `docs/relatorio.md`. A API e o diagrama de sequencia estao em `docs/api.md`. O artigo no formato da SBC ainda e um texto a parte.
+A API e o diagrama de sequencia estao em `docs/api.md`. O relatorio escrito e o artigo no formato da SBC vao fora deste repositorio.
 
 Pra derrubar uma empresa no meio, na pasta `emulacao`: `docker compose stop sudoeste`. Sem Docker, fecha o terminal dela com Ctrl+C. A busca Salvador -> Cachoeira tem que continuar. A viagem ate Montes Claros tem que falhar sem baixar vaga, se a queda for antes da decisao gravada. Pra voltar: `docker compose start sudoeste`, ou sobe o processo de novo no mesmo arquivo. Essa queda no meio, com os tres PCs ligados, ainda nao foi o ensaio. O que ja rodou foi busca, reserva e a disputa da ultima vaga.
 
@@ -309,6 +309,5 @@ Pra derrubar uma empresa no meio, na pasta `emulacao`: `docker compose stop sudo
 | interno/cli.go | tela do motorista e do passageiro |
 | cmd/ | o main de cada programa, fino, igual o problema 1 |
 | docs/api.md | a API REST e o diagrama da reserva |
-| docs/relatorio.md | os 11 pontos do barema, com o lugar no codigo |
 
 Preco em real inteiro. Senha em texto. E prototipo.

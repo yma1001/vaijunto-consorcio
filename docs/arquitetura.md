@@ -1,6 +1,6 @@
 # Arquitetura (notas curtas)
 
-O texto na ordem do barema esta em `docs/relatorio.md`. Aqui e o resumo.
+Aqui e o resumo. O relatorio escrito vai fora deste repositorio.
 
 ## Problema 1 x problema 2
 
