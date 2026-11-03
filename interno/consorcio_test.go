@@ -17,6 +17,7 @@ import (
 
 const segredoTeste = "segredo-lab"
 
+// Se a condicao falhar, marca o teste. Nao para os outros checks.
 func checar(t *testing.T, ok bool, msg string) {
 	t.Helper()
 	if ok {
@@ -33,6 +34,7 @@ type trio struct {
 	mortos  map[string]bool
 }
 
+// Sobe as tres empresas em portas aleatorias, com o mesmo SEGREDO de teste.
 func subirTrio(t *testing.T, expira, janela, timeout time.Duration) *trio {
 	t.Helper()
 	pasta := t.TempDir()
@@ -77,6 +79,7 @@ func subirTrio(t *testing.T, expira, janela, timeout time.Duration) *trio {
 	return tr
 }
 
+// Fica tentando GET /consorcio/saude ate responder ou estourar o prazo.
 func esperarSaude(t *testing.T, base string) {
 	t.Helper()
 	limite := time.Now().Add(5 * time.Second)
@@ -91,6 +94,7 @@ func esperarSaude(t *testing.T, base string) {
 	t.Fatal("nao subiu " + base)
 }
 
+// Acha a URL pelo nome da empresa.
 func (tr *trio) url(empresa string) string {
 	for _, e := range tr.estados {
 		if e.Empresa == empresa {
@@ -100,6 +104,7 @@ func (tr *trio) url(empresa string) string {
 	return ""
 }
 
+// Para a limpeza e desliga quem ainda esta vivo.
 func (tr *trio) derrubar() {
 	for _, e := range tr.estados {
 		e.Parar()
@@ -114,6 +119,7 @@ func (tr *trio) derrubar() {
 	}
 }
 
+// Desliga uma empresa e marca, pra o derrubar do fim nao desligar de novo.
 func (tr *trio) derrubarEmpresa(empresa string) {
 	for i, e := range tr.estados {
 		if e.Empresa != empresa {
@@ -128,6 +134,7 @@ func (tr *trio) derrubarEmpresa(empresa string) {
 	}
 }
 
+// Pede os trechos do dia e devolve a vaga visivel daquele par de cidades.
 func vaga(t *testing.T, base, origem, destino string) int {
 	t.Helper()
 	var resp Resposta
@@ -144,12 +151,14 @@ func vaga(t *testing.T, base, origem, destino string) int {
 	return -1
 }
 
+// GET /buscar. O nome nao e buscar porque o cli.go ja tem essa funcao.
 func buscarRota(base, origem, destino string) Resposta {
 	var resp Resposta
 	Pedir("GET", base+"/buscar?origem="+escapar(origem)+"&destino="+escapar(destino)+"&data=2026-10-30", nil, 5*time.Second, &resp)
 	return resp
 }
 
+// POST /reservar com a senha da conta.
 func reservar(base, usuario string, trechos []TrechoViagem) Resposta {
 	var resp Resposta
 	Pedir("POST", base+"/reservar", map[string]any{
@@ -160,6 +169,7 @@ func reservar(base, usuario string, trechos []TrechoViagem) Resposta {
 	return resp
 }
 
+// Procura um itinerario de 3 trechos que use as tres empresas.
 func acharCaminho(its []Itinerario) []TrechoViagem {
 	for _, it := range its {
 		if len(it.Trechos) != 3 {
@@ -176,6 +186,7 @@ func acharCaminho(its []Itinerario) []TrechoViagem {
 	return nil
 }
 
+// JSON quebrado volta 400 e nao mexe na vaga.
 func TestJSONRuim(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 40*time.Millisecond, 3*time.Second)
 	defer tr.derrubar()
@@ -194,6 +205,7 @@ func TestJSONRuim(t *testing.T) {
 	checar(t, vaga(t, tr.url("vaijunto"), "Salvador", "Cachoeira") == antes, "vaga continua igual")
 }
 
+// Reserva o caminho das tres, baixa 1 em cada, e a segunda pessoa falha.
 func TestBuscaEReserva(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 40*time.Millisecond, 3*time.Second)
 	defer tr.derrubar()
@@ -226,6 +238,7 @@ func TestBuscaEReserva(t *testing.T) {
 	checar(t, vaga(t, tr.url("vaijunto"), "Salvador", "Cachoeira") == 2, "carona que ninguem usou continua igual")
 }
 
+// Cancelar devolve a vaga uma vez. A segunda chamada nao devolve de novo.
 func TestCancelarDevolve(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 40*time.Millisecond, 3*time.Second)
 	defer tr.derrubar()
@@ -250,6 +263,7 @@ func TestCancelarDevolve(t *testing.T) {
 	checar(t, vaga(t, tr.url("vaijunto"), "Salvador", "Cachoeira") == 2, "nao devolveu vaga duas vezes")
 }
 
+// Mata a sudoeste antes da reserva. A viagem falha e a vaga livre nao muda.
 func TestEmpresaCai(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 40*time.Millisecond, time.Second)
 	defer tr.derrubar()
@@ -270,6 +284,7 @@ func TestEmpresaCai(t *testing.T) {
 	checar(t, len(local.Itinerarios) >= 1, "busca local funciona com a outra empresa caída")
 }
 
+// Segurou e ninguem confirmou. Depois do prazo a vaga volta, porque ainda estava esperando.
 func TestSeguroExpira(t *testing.T) {
 	tr := subirTrio(t, 1200*time.Millisecond, 20*time.Millisecond, 3*time.Second)
 	defer tr.derrubar()
@@ -300,6 +315,7 @@ func TestSeguroExpira(t *testing.T) {
 	checar(t, vaga(t, tr.url("norteminas"), "Vitória da Conquista", "Montes Claros") == 1, "depois do prazo a vaga voltou")
 }
 
+// Dois passageiros ao mesmo tempo na ultima vaga. Exatamente um ganha.
 func TestDisputaSimultanea(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 80*time.Millisecond, 4*time.Second)
 	defer tr.derrubar()
@@ -333,6 +349,7 @@ func TestDisputaSimultanea(t *testing.T) {
 	checar(t, vaga(t, tr.url("sudoeste"), "Feira de Santana", "Vitória da Conquista") == 2, "so um assento saiu da sudoeste")
 }
 
+// Acha o Estado pelo nome.
 func (tr *trio) estado(empresa string) *Estado {
 	for _, e := range tr.estados {
 		if e.Empresa == empresa {
@@ -342,6 +359,7 @@ func (tr *trio) estado(empresa string) *Estado {
 	return nil
 }
 
+// Sobe a mesma empresa de novo, no mesmo arquivo e com o mesmo SEGREDO.
 func (tr *trio) reiniciar(t *testing.T, empresa string) {
 	t.Helper()
 	for i, e := range tr.estados {
@@ -379,6 +397,7 @@ func (tr *trio) reiniciar(t *testing.T, empresa string) {
 	t.Fatal("nao achei " + empresa)
 }
 
+// Devolve a fase do pedido daquele passageiro.
 func (tr *trio) fase(empresa, passageiro string) string {
 	e := tr.estado(empresa)
 	if e == nil {
@@ -394,6 +413,7 @@ func (tr *trio) fase(empresa, passageiro string) string {
 	return ""
 }
 
+// Le VagasLivres no JSON da memoria, sem descontar seguro.
 func vagaBruta(tr *trio, empresa, origem, destino string) int {
 	e := tr.estado(empresa)
 	if e == nil {
@@ -411,6 +431,7 @@ func vagaBruta(tr *trio, empresa, origem, destino string) int {
 	return -1
 }
 
+// A norteminas grava o confirmar e a resposta se perde. Ao voltar, a vaga baixa uma vez.
 func TestAckPerdido(t *testing.T) {
 	tr := subirTrio(t, 30*time.Second, 20*time.Millisecond, time.Second)
 	defer tr.derrubar()
@@ -440,6 +461,7 @@ func TestAckPerdido(t *testing.T) {
 	checar(t, vagaBruta(tr, "sudoeste", "Feira de Santana", "Vitória da Conquista") == 2, "sudoeste baixou uma")
 }
 
+// Trecho repetido nao reserva, sem senha nao reserva, e a mesma chave nao compra dois assentos.
 func TestTrechoDuplicadoESenha(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
 	defer tr.derrubar()
@@ -495,6 +517,7 @@ func TestTrechoDuplicadoESenha(t *testing.T) {
 	checar(t, vagaBruta(tr, "vaijunto", "Salvador", "Cachoeira") == 1, "nao comprou o assento duas vezes")
 }
 
+// Conta reservas confirmadas daquele passageiro.
 func reservasDo(tr *trio, empresa, passageiro string) int {
 	e := tr.estado(empresa)
 	e.Trava.Lock()
@@ -508,6 +531,7 @@ func reservasDo(tr *trio, empresa, passageiro string) int {
 	return n
 }
 
+// Dez chamadas ao mesmo tempo com a mesma chave. Uma reserva so.
 func TestMesmaTentativa(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 30*time.Millisecond, 3*time.Second)
 	defer tr.derrubar()
@@ -544,6 +568,7 @@ func TestMesmaTentativa(t *testing.T) {
 	checar(t, vagaBruta(tr, "sudoeste", "Feira de Santana", "Vitória da Conquista") == 2, "saiu um assento dos tres")
 }
 
+// A janela e maior que o prazo. Voto ja segurado nao vira aborto.
 func TestPrazoNaoAbortaConfirmacao(t *testing.T) {
 	tr := subirTrio(t, time.Second, 750*time.Millisecond, time.Second)
 	defer tr.derrubar()
@@ -569,6 +594,7 @@ func TestPrazoNaoAbortaConfirmacao(t *testing.T) {
 	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 0, "a ultima vaga baixou uma vez")
 }
 
+// Se o disco falha, a fase na memoria volta e o arquivo antigo fica.
 func TestGravacaoFalha(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
 	defer tr.derrubar()
@@ -626,6 +652,7 @@ func TestGravacaoFalha(t *testing.T) {
 	checar(t, estado == "segurado", "o seguro continua segurado na memoria")
 }
 
+// Voto prometido fica preso se o coordenador cai. Outra empresa ainda reserva a viagem dela.
 func TestCoordenadorMudo(t *testing.T) {
 	tr := subirTrio(t, 1500*time.Millisecond, 20*time.Millisecond, 400*time.Millisecond)
 	defer tr.derrubar()
@@ -657,6 +684,7 @@ func TestCoordenadorMudo(t *testing.T) {
 	checar(t, vagaBruta(tr, "sudoeste", "Feira de Santana", "Vitória da Conquista") == 2, "a sudoeste baixou a vaga dela")
 }
 
+// Falhou ao gravar confirmando. O pedido aborta quando o disco volta, sem reiniciar.
 func TestDiscoVoltaSemReiniciar(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
 	defer tr.derrubar()
@@ -691,6 +719,7 @@ func TestDiscoVoltaSemReiniciar(t *testing.T) {
 	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 1, "nao vendeu de novo")
 }
 
+// A resposta do segurar se perde e a escrita de abortando falha. A vaga volta com os tres vivos.
 func TestAbortoDiscoVolta(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
 	defer tr.derrubar()
@@ -729,6 +758,7 @@ func TestAbortoDiscoVolta(t *testing.T) {
 	}
 }
 
+// Sem credencial 401, senha da conta 401, outra empresa 403. A coordenadora repete o confirmar.
 func TestDesfazerSoCoordenador(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
 	defer tr.derrubar()
@@ -760,6 +790,8 @@ func TestDesfazerSoCoordenador(t *testing.T) {
 	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 0, "repetir nao devolve a vaga")
 }
 
+// Vazio se nao tem seguro esperando ou segurado, nem pedido no meio do protocolo.
+// Reserva confirmada nao conta: a venda fechou.
 func estadoSemPendencia(tr *trio, empresa string) string {
 	e := tr.estado(empresa)
 	if e == nil {
@@ -780,6 +812,7 @@ func estadoSemPendencia(tr *trio, empresa string) string {
 	return ""
 }
 
+// Verdadeiro se alguma empresa ja tem pedido ou seguro. O teste de carga espera isso pra derrubar.
 func temAndamento(tr *trio) bool {
 	for _, e := range tr.estados {
 		e.Trava.Lock()
@@ -792,6 +825,7 @@ func temAndamento(tr *trio) bool {
 	return false
 }
 
+// Nomes dos passageiros com reserva confirmada naquele par de cidades.
 func titularesDoTrecho(tr *trio, origem, destino string) []string {
 	var nomes []string
 	for _, e := range tr.estados {
@@ -811,6 +845,8 @@ func titularesDoTrecho(tr *trio, origem, destino string) []string {
 	return nomes
 }
 
+// 18 passageiros. A sudoeste cai no meio e volta.
+// No fim nao pode ter pendencia, e o saldo de cada trecho tem que bater com os titulares.
 func TestCargaComQueda(t *testing.T) {
 	tr := subirTrio(t, 20*time.Second, 40*time.Millisecond, time.Second)
 	defer tr.derrubar()

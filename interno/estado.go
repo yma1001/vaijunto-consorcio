@@ -151,13 +151,15 @@ type Estado struct {
 	Pedidos            map[string]*Pedido
 	Contador           int
 	Ligado             bool
-	CortarAckConfirmar bool
-	CortarAckSegurar   bool
-	FalharSeFase       string
-	Segredo            string
-	Abandonados        map[string]bool
+	CortarAckConfirmar bool            // o teste fecha a conexao depois de gravar o confirmar
+	CortarAckSegurar   bool            // o teste fecha a conexao depois de gravar o segurar
+	FalharSeFase       string          // a proxima gravacao desta fase falha uma vez. nao vai pro arquivo
+	Segredo            string          // senha entre empresas. nao e a senha das contas. nao vai pro arquivo
+	Abandonados        map[string]bool // ids cuja decisao nao entrou no disco. nao vai pro arquivo
 }
 
+// Monta a memoria vazia de uma empresa. Contador comeca em 1.
+// Segredo fica vazio. Quem sobe o servidor preenche com SEGREDO.
 func NovoEstado(empresa, regiao, arquivo, urlPropria string, pares []Par, expira, janela, timeout time.Duration) *Estado {
 	if pares == nil {
 		pares = []Par{}
@@ -182,12 +184,14 @@ func NovoEstado(empresa, regiao, arquivo, urlPropria string, pares []Par, expira
 	}
 }
 
+// Marca o processo pra parar. A limpeza olha isso e sai do laco.
 func (e *Estado) Parar() {
 	e.Trava.Lock()
 	e.Ligado = false
 	e.Trava.Unlock()
 }
 
+// Le a marca Ligado com a trava.
 func (e *Estado) ligado() bool {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -202,8 +206,9 @@ func (e *Estado) ProximoID(prefixo string) string {
 }
 
 // Salvar assume a trava na mao.
-// Escreve .tmp e troca o nome. Se morrer no meio do write, o arquivo antigo fica.
-// Se a troca falhar, o arquivo anterior continua no lugar.
+// Escreve .tmp, da Sync e troca o nome. Se morrer no meio, o arquivo antigo fica.
+// Se a troca falhar, o .bak guarda o ultimo arquivo bom.
+// Se FalharSeFase estiver preenchido e algum pedido ja esta nessa fase, esta gravacao falha uma vez.
 func (e *Estado) Salvar() error {
 	if e.FalharSeFase != "" {
 		for _, p := range e.Pedidos {
@@ -266,6 +271,8 @@ func (e *Estado) Salvar() error {
 	return nil
 }
 
+// Se o arquivo nao existe, semeia as caronas e grava.
+// Se existe, le o JSON. Mapa nil no arquivo nao apaga o mapa vazio.
 func (e *Estado) CarregarOuSemear() error {
 	_, err := os.Stat(e.Arquivo)
 	if os.IsNotExist(err) {
@@ -316,6 +323,7 @@ func (e *Estado) CarregarOuSemear() error {
 	return nil
 }
 
+// Cria as tres contas da demo e as caronas desta empresa.
 func (e *Estado) semear() {
 	// mesma conta nas tres empresas, mas sao listas separadas.
 	// senha em texto. o problema 1 tambem era. nao e sistema de banco.
@@ -334,6 +342,7 @@ func (e *Estado) semear() {
 	}
 }
 
+// Gera o id, um trecho por par de cidades, status ativa, e guarda no mapa.
 func (e *Estado) criarCarona(motorista string, cidades []string, data, hora string, vagas int, precos []int) string {
 	id := e.ProximoID("carona")
 	trechos := make([]TrechoCarona, 0)
@@ -359,6 +368,7 @@ func (e *Estado) criarCarona(motorista string, cidades []string, data, hora stri
 	return id
 }
 
+// Confere usuario e senha. Nao grava nada.
 func (e *Estado) Entrar(usuario, senha string) Resposta {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -369,6 +379,7 @@ func (e *Estado) Entrar(usuario, senha string) Resposta {
 	return Resposta{OK: true, Usuario: usuario, Papel: u.Papel, Empresa: e.Empresa, Regiao: e.Regiao}
 }
 
+// Recusa nome vazio, papel errado e nome repetido. Grava, da Tic e salva.
 func (e *Estado) Cadastrar(usuario, senha, papel string) Resposta {
 	if usuario == "" || senha == "" {
 		return Resposta{Erro: "usuario e senha obrigatorios"}
@@ -390,6 +401,7 @@ func (e *Estado) Cadastrar(usuario, senha, papel string) Resposta {
 	return Resposta{OK: true, Usuario: usuario, Papel: papel}
 }
 
+// So motorista. Exige duas cidades, um preco por trecho e pelo menos uma vaga.
 func (e *Estado) PublicarCarona(usuario, senha string, cidades []string, data, hora string, vagas int, precos []int) Resposta {
 	if len(cidades) < 2 {
 		return Resposta{Erro: "precisa de pelo menos duas cidades"}
@@ -432,6 +444,8 @@ func (e *Estado) PublicarCarona(usuario, senha string, cidades []string, data, h
 	return Resposta{OK: true, Carona: &copia}
 }
 
+// So o dono. Se ja tem passageiro confirmado nessa carona, recusa.
+// Nao desfaz reserva nas outras empresas.
 func (e *Estado) CancelarCarona(usuario, senha, idCarona string) Resposta {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -465,6 +479,7 @@ func (e *Estado) CancelarCarona(usuario, senha, idCarona string) Resposta {
 	return Resposta{OK: true}
 }
 
+// So o motorista. Devolve copia das caronas dele.
 func (e *Estado) ListarMinhasCaronas(usuario, senha string) Resposta {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -494,6 +509,8 @@ type trechoComGente struct {
 	Passageiros []gente `json:"passageiros"`
 }
 
+// So o dono da carona. Junta, por trecho, quem esta confirmado.
+// O passageiro pode ser de outra empresa.
 func (e *Estado) ListarPassageiros(usuario, senha, idCarona string) (Resposta, []trechoComGente) {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -532,6 +549,7 @@ func (e *Estado) ListarPassageiros(usuario, senha, idCarona string) (Resposta, [
 	return Resposta{OK: true}, saida
 }
 
+// So o passageiro. Devolve copia das reservas dele.
 func (e *Estado) ListarMinhasReservas(usuario, senha string) Resposta {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -549,6 +567,8 @@ func (e *Estado) ListarMinhasReservas(usuario, senha string) Resposta {
 }
 
 // AcharTrecho devolve o trecho de verdade, dentro do map. trava na mao.
+// Devolve o trecho de verdade se a carona existe e esta ativa.
+// Quem chama ja tem a trava.
 func (e *Estado) AcharTrecho(idCarona string, indice int) *TrechoCarona {
 	c := e.Caronas[idCarona]
 	if c == nil || c.Status != "ativa" {
@@ -564,6 +584,8 @@ func (e *Estado) AcharTrecho(idCarona string, indice int) *TrechoCarona {
 
 // VagasOcupadas conta seguro prometido (segurado). confirmado ja baixou vagas_livres.
 // Promessa vencida continua contando ate a limpeza saber a decisao. trava na mao.
+// Conta seguro segurado que ainda nao venceu, naquele trecho.
+// Confirmado nao entra: a vaga ja saiu de VagasLivres.
 func (e *Estado) VagasOcupadas(idCarona string, indice int) int {
 	ocupadas := 0
 	for _, s := range e.Seguros {
@@ -579,6 +601,8 @@ func (e *Estado) VagasOcupadas(idCarona string, indice int) int {
 	return ocupadas
 }
 
+// Lista os trechos ativos do dia.
+// A vaga mostrada e a livre menos a ocupada. Se der negativo, mostra 0.
 func (e *Estado) TrechosPublicos(data string) []TrechoViagem {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -613,6 +637,8 @@ func (e *Estado) TrechosPublicos(data string) []TrechoViagem {
 	return lista
 }
 
+// Se o nome sou eu, devolve a URL propria. Senao procura nos pares.
+// Vazio quer dizer que nao conheco essa empresa.
 func (e *Estado) urlDa(nome string) string {
 	if nome == e.Empresa {
 		return e.URLPropria
@@ -625,6 +651,7 @@ func (e *Estado) urlDa(nome string) string {
 	return ""
 }
 
+// Copia a carona. A resposta HTTP nao devolve o ponteiro interno.
 func copiarCarona(c *Carona) Carona {
 	copia := *c
 	copia.Cidades = append([]string(nil), c.Cidades...)
@@ -632,6 +659,7 @@ func copiarCarona(c *Carona) Carona {
 	return copia
 }
 
+// Copia a reserva, pelo mesmo motivo da carona.
 func copiarReserva(r *Reserva) Reserva {
 	copia := *r
 	copia.Trechos = append([]TrechoViagem(nil), r.Trechos...)

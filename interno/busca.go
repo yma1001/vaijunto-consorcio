@@ -10,6 +10,8 @@ import (
 // limite de 3 trechos cobre Salvador -> Feira -> Vitoria -> Montes Claros.
 // Nao usei biblioteca de grafo. Com pouca carona, uma recursao da conta.
 
+// Tira espaco, baixa a caixa e troca acento.
+// Vitoria e Vitória passam a ser a mesma cidade.
 func NormalizarCidade(nome string) string {
 	nome = strings.ToLower(strings.TrimSpace(nome))
 	trocas := strings.NewReplacer(
@@ -23,6 +25,7 @@ func NormalizarCidade(nome string) string {
 	return trocas.Replace(nome)
 }
 
+// Soma o preco dos trechos. O numero e real inteiro, nao centavo.
 func somarPreco(caminho []TrechoViagem) int {
 	total := 0
 	for _, t := range caminho {
@@ -31,6 +34,8 @@ func somarPreco(caminho []TrechoViagem) int {
 	return total
 }
 
+// Monta caminhos e nao grava vaga.
+// Para em `limite` trechos e devolve no maximo `maximo`, mais barato primeiro.
 func MontarItinerarios(trechos []TrechoViagem, origem, destino string, limite, maximo int) [][]TrechoViagem {
 	origemN := NormalizarCidade(origem)
 	destinoN := NormalizarCidade(destino)
@@ -47,6 +52,7 @@ func MontarItinerarios(trechos []TrechoViagem, origem, destino string, limite, m
 
 	achados := make([][]TrechoViagem, 0)
 	var andar func(cidade string, caminho []TrechoViagem, usados map[string]bool, cidades map[string]bool)
+	// Anda de cidade em cidade. Nao repete trecho nem cidade.
 	andar = func(cidade string, caminho []TrechoViagem, usados map[string]bool, cidades map[string]bool) {
 		if len(achados) >= maximo*4 {
 			return

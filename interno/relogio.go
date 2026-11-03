@@ -17,6 +17,8 @@ type Relogio struct {
 	Valor int
 }
 
+// Tic soma 1 e devolve o numero novo.
+// Quem chama ja esta com a trava do estado.
 func (r *Relogio) Tic() int {
 	// quem chama ja esta com a trava do estado. nao pus outra trava aqui
 	// porque duas travas viram deadlock se a ordem inverter.
@@ -24,6 +26,8 @@ func (r *Relogio) Tic() int {
 	return r.Valor
 }
 
+// Receber olha o numero que chegou na mensagem.
+// Se for maior, pula pra ele. Depois soma 1. Negativo eu ignoro.
 func (r *Relogio) Receber(chegou int) int {
 	if chegou < 0 {
 		return r.Valor

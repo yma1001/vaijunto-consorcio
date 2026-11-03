@@ -13,6 +13,7 @@ import (
 // A carona de Montes Claros nasce com 1 vaga. O normal e 1 sucesso.
 // SIM_EMPRESAS troca o endereco. exemplo: vaijunto|http://192.168.0.10:5001,sudoeste|http://192.168.0.11:5002
 
+// As tres portas locais, ou o que estiver em SIM_EMPRESAS.
 func empresasDoSimulador() []Par {
 	texto := os.Getenv("SIM_EMPRESAS")
 	if texto == "" {
@@ -33,6 +34,7 @@ func empresasDoSimulador() []Par {
 	return saida
 }
 
+// Dispara varios passageiros ao mesmo tempo e conta quantos confirmaram.
 func RodarSimulador() {
 	quantidade := 8
 	if len(os.Args) > 1 {
@@ -93,6 +95,7 @@ func RodarSimulador() {
 	fmt.Println("se deu mais de uma confirma e a vaga de Montes Claros era 1, olha a atomicidade")
 }
 
+// Cadastra um usuario, busca Salvador ate Montes Claros e reserva o primeiro caminho.
 func umPassageiro(indice int, marca string, empresas []Par, trava *sync.Mutex) string {
 	par := empresas[indice%len(empresas)]
 	usuario := fmt.Sprintf("simulado%s-%d", marca, indice)

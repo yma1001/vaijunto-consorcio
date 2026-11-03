@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// Escapa o texto pra ir na query da URL.
 func escapar(s string) string {
 	return url.QueryEscape(s)
 }
@@ -23,6 +24,8 @@ func escapar(s string) string {
 // Seguro "segurado": pergunto ao coordenador. confirmado eu confirmo.
 // abortado ou desconhecido eu solto. se ele nao responder, espero.
 
+// Roda quando o processo volta, depois de ler o arquivo.
+// Pedido que ficou segurando eu aborto. O resto vai pra retomarPendentes.
 func AoSubir(e *Estado) {
 	e.Trava.Lock()
 	var segurando []string
@@ -40,6 +43,7 @@ func AoSubir(e *Estado) {
 	reconciliarSeguros(e)
 }
 
+// Confirmando eu confirmo de novo. Abortando e cancelando eu repito ate todo mundo responder.
 func retomarPendentes(e *Estado) {
 	e.Trava.Lock()
 	var confirmar []string
@@ -92,6 +96,8 @@ func retomarAbandonados(e *Estado) {
 	}
 }
 
+// Esperando vencido eu solto, porque a vaga ainda nao foi prometida.
+// Segurado vencido eu pergunto ao coordenador. Se ele nao responder, eu espero. Nao solto.
 func reconciliarSeguros(e *Estado) {
 	agora := time.Now()
 	type item struct {
@@ -141,6 +147,8 @@ func reconciliarSeguros(e *Estado) {
 	}
 }
 
+// A cada 400 ms, enquanto o processo esta ligado.
+// Se der panic, imprimo e o laco continua.
 func LoopLimpeza(e *Estado) {
 	for e.ligado() {
 		time.Sleep(400 * time.Millisecond)

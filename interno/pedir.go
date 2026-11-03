@@ -22,6 +22,8 @@ func PedirComo(metodo, url, usuario, senha string, corpo any, timeout time.Durat
 	return pedir(metodo, url, usuario, senha, corpo, timeout, destino)
 }
 
+// HTTP de verdade. Se o usuario vier preenchido, manda Basic.
+// Bool true = queda, ou JSON que nao decodificou. Um 409 com JSON vale false.
 func pedir(metodo, url, usuario, senha string, corpo any, timeout time.Duration, destino any) (int, bool) {
 	var leitor io.Reader
 	if corpo != nil {

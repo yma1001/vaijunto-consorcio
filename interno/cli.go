@@ -12,6 +12,7 @@ import (
 
 var entrada = bufio.NewReader(os.Stdin)
 
+// Imprime o rotulo e le ate o enter.
 func lerLinha(rotulo string) string {
 	fmt.Print(rotulo)
 	s, err := entrada.ReadString('\n')
@@ -22,6 +23,7 @@ func lerLinha(rotulo string) string {
 	return strings.TrimSpace(s)
 }
 
+// Se vier dia/mes/ano, devolve aaaa-mm-dd. Sem barra, devolvo como veio.
 func ArrumarData(texto string) string {
 	texto = strings.TrimSpace(texto)
 	if strings.Contains(texto, "/") {
@@ -43,10 +45,13 @@ func ArrumarData(texto string) string {
 	return texto
 }
 
+// Chama falarComo sem usuario. Queda imprime que nao falou com o servidor.
 func falar(metodo, endereco string, corpo any, destino any) bool {
 	return falarComo(metodo, endereco, "", "", corpo, destino)
 }
 
+// HTTP com 8 segundos. Se o usuario vier, manda Basic.
+// 401 imprime usuario ou senha invalido.
 func falarComo(metodo, endereco, usuario, senha string, corpo any, destino any) bool {
 	var status int
 	var erroRede bool
@@ -66,6 +71,7 @@ func falarComo(metodo, endereco, usuario, senha string, corpo any, destino any) 
 	return true
 }
 
+// Monta a URL com a query escapada.
 func urlComQuery(base, caminho string, params map[string]string) string {
 	q := url.Values{}
 	for k, v := range params {
@@ -74,6 +80,7 @@ func urlComQuery(base, caminho string, params map[string]string) string {
 	return strings.TrimRight(base, "/") + caminho + "?" + q.Encode()
 }
 
+// Pergunta o endereco. Enter vazio vira http://127.0.0.1:5001.
 func pedirBase() string {
 	base := lerLinha("url da empresa [http://127.0.0.1:5001]: ")
 	if base == "" {
@@ -82,6 +89,7 @@ func pedirBase() string {
 	return strings.TrimRight(base, "/")
 }
 
+// Pede a saude e imprime empresa e regiao.
 func mostrarSaude(base string) {
 	var saude struct {
 		OK      bool   `json:"ok"`
@@ -93,6 +101,7 @@ func mostrarSaude(base string) {
 	}
 }
 
+// Menu de entrar ou cadastrar como motorista. Conta de passageiro eu recuso.
 func RodarMotorista() {
 	fmt.Println("cliente motorista do vaijunto (consorcio)")
 	fmt.Println("fala SO com a sua empresa")
@@ -141,6 +150,7 @@ func RodarMotorista() {
 	}
 }
 
+// Publicar carona, listar as minhas, ver passageiros, ou sair.
 func menuMotorista(base, usuario, senha string) {
 	for {
 		fmt.Println()
@@ -167,6 +177,7 @@ func menuMotorista(base, usuario, senha string) {
 	}
 }
 
+// Le cidades, data, hora, vagas e precos, e manda POST /caronas.
 func publicar(base, usuario, senha string) {
 	fmt.Println("cidades na ordem, separadas por virgula")
 	fmt.Println("exemplo: Salvador, Feira de Santana")
@@ -224,6 +235,7 @@ func publicar(base, usuario, senha string) {
 	}
 }
 
+// Lista as caronas deste motorista. A senha vai no Basic, nao na URL.
 func minhasCaronas(base, usuario, senha string) {
 	var resp Resposta
 	if !falarComo("GET", urlComQuery(base, "/minhas-caronas", map[string]string{"usuario": usuario}), usuario, senha, nil, &resp) || !resp.OK {
@@ -246,6 +258,7 @@ func minhasCaronas(base, usuario, senha string) {
 	}
 }
 
+// Pede o id da carona e mostra quem confirmou em cada trecho.
 func verPassageiros(base, usuario, senha string) {
 	id := lerLinha("id da carona: ")
 	var resp struct {
@@ -272,6 +285,7 @@ func verPassageiros(base, usuario, senha string) {
 	}
 }
 
+// Igual ao motorista, com papel passageiro.
 func RodarPassageiro() {
 	fmt.Println("cliente passageiro do vaijunto (consorcio)")
 	fmt.Println("fala SO com a sua empresa. a viagem pode usar carona das outras.")
@@ -320,6 +334,7 @@ func RodarPassageiro() {
 	}
 }
 
+// Buscar, reservar uma opcao, ver reservas, cancelar, ou sair.
 func menuPassageiro(base, usuario, senha string) {
 	var ultima []Itinerario
 	var chave string
@@ -348,6 +363,7 @@ func menuPassageiro(base, usuario, senha string) {
 	}
 }
 
+// Pede origem, destino e data. Devolve as opcoes, sem reservar.
 func buscar(base string) []Itinerario {
 	origem := lerLinha("origem: ")
 	destino := lerLinha("destino: ")
@@ -375,6 +391,8 @@ func buscar(base string) []Itinerario {
 	return resp.Itinerarios
 }
 
+// Manda os trechos da opcao escolhida e guarda a chave da tentativa.
+// Se voltar 202, a mesma chave pergunta de novo. Nao e recusa.
 func reservarOpcao(base, usuario, senha string, chave *string, ultima []Itinerario) {
 	if len(ultima) == 0 {
 		fmt.Println("busca primeiro")
@@ -420,6 +438,7 @@ func reservarOpcao(base, usuario, senha string, chave *string, ultima []Itinerar
 	}
 }
 
+// Lista as reservas deste passageiro. A senha vai no Basic.
 func minhasReservas(base, usuario, senha string) {
 	var resp Resposta
 	if !falarComo("GET", urlComQuery(base, "/minhas-reservas", map[string]string{"usuario": usuario}), usuario, senha, nil, &resp) || !resp.OK {
@@ -441,6 +460,7 @@ func minhasReservas(base, usuario, senha string) {
 	}
 }
 
+// Pede o id e manda POST /cancelar-reserva.
 func cancelar(base, usuario, senha string) {
 	id := lerLinha("id da reserva: ")
 	var resp Resposta
@@ -455,6 +475,7 @@ func cancelar(base, usuario, senha string) {
 	fmt.Println("cancelada")
 }
 
+// Pede o id e manda POST /cancelar-carona.
 func cancelarCarona(base, usuario, senha string) {
 	id := lerLinha("id da carona: ")
 	var resp Resposta

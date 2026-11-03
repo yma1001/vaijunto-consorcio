@@ -51,6 +51,7 @@ type grupo struct {
 	trechos []TrechoViagem
 }
 
+// Recusa caminho vazio, campo faltando, ou cidade que nao encaixa no trecho anterior.
 func validarCadeia(trechos []TrechoViagem) string {
 	if len(trechos) == 0 {
 		return "itinerario vazio"
@@ -72,6 +73,8 @@ func validarCadeia(trechos []TrechoViagem) string {
 	return ""
 }
 
+// Junta os trechos pelo nome da empresa e ordena.
+// Sai norteminas, sudoeste, vaijunto. E a ordem que evita deadlock, nao a ordem da estrada.
 func agruparPorEmpresa(trechos []TrechoViagem) []grupo {
 	porNome := map[string][]TrechoViagem{}
 	for _, t := range trechos {
@@ -89,6 +92,9 @@ func agruparPorEmpresa(trechos []TrechoViagem) []grupo {
 	return saida
 }
 
+// So olha quem esta esperando. Ordena por relogio, nome da empresa e id.
+// Quem cabe vira segurado na hora. Quem nao cabe vira negado.
+// Quem chama ja tem a trava. Esta funcao nao dorme.
 func (e *Estado) decidirQuemFicaComAVaga() {
 	esperando := make([]*Seguro, 0)
 	for _, s := range e.Seguros {
@@ -136,6 +142,9 @@ func (e *Estado) decidirQuemFicaComAVaga() {
 	}
 }
 
+// O que a empresa dona do trecho faz quando chega um segurar.
+// Se este id ja esta segurado ou confirmado, responde ok e nao marca de novo.
+// Se e novo, grava esperando, solta a trava, dorme a janela, e so entao decide.
 func (e *Estado) TratarSegurar(c CorpoSegurar) (bool, string) {
 	if c.IDPedido == "" {
 		return false, "faltou id do pedido"
@@ -224,6 +233,8 @@ func (e *Estado) TratarSegurar(c CorpoSegurar) (bool, string) {
 	return true, "ok"
 }
 
+// So baixa vaga se estava segurado. Se ja confirmou, responde ok e nao baixa de novo.
+// Voto ja segurado nao olha o prazo. Se a gravacao falhar, devolvo a vaga na memoria.
 func (e *Estado) TratarConfirmar(idPedido, empresa string, relogio int) (bool, string) {
 	if idPedido == "" {
 		return false, "faltou id do pedido"
@@ -279,6 +290,9 @@ func (e *Estado) TratarConfirmar(idPedido, empresa string, relogio int) (bool, s
 	return true, "ok"
 }
 
+// Se ja abortou, responde ok e nao soma vaga de novo.
+// Se estava confirmado, devolve 1, sem passar da capacidade da carona.
+// Esperando e segurado so mudam o estado: a vaga livre nunca tinha baixado.
 func (e *Estado) TratarDesfazer(idPedido, empresa string) (bool, string) {
 	if idPedido == "" {
 		return false, "faltou id do pedido"
@@ -332,6 +346,7 @@ func (e *Estado) TratarDesfazer(idPedido, empresa string) (bool, string) {
 	return true, "ok"
 }
 
+// Diz o que este processo tem gravado: confirmado, abortado, segurado, pendente ou desconhecido.
 func (e *Estado) ConsultarPedido(idPedido string) string {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -358,6 +373,8 @@ func (e *Estado) ConsultarPedido(idPedido string) string {
 	return "segurado"
 }
 
+// Se a empresa sou eu, chamo TratarSegurar. Se e outra, mando POST com Basic.
+// Queda vira sem resposta. Isso e diferente de ela responder que nao tem vaga.
 func (e *Estado) segurarNa(empresa string, c CorpoSegurar) (bool, bool, string) {
 	if empresa == e.Empresa {
 		ok, motivo := e.TratarSegurar(c)
@@ -381,6 +398,7 @@ func (e *Estado) segurarNa(empresa string, c CorpoSegurar) (bool, bool, string) 
 	return true, false, "ok"
 }
 
+// Igual ao segurarNa, para o confirmar.
 func (e *Estado) confirmarNa(empresa, idPedido string, relogio int) (bool, bool, string) {
 	if empresa == e.Empresa {
 		ok, motivo := e.TratarConfirmar(idPedido, e.Empresa, relogio)
@@ -404,6 +422,7 @@ func (e *Estado) confirmarNa(empresa, idPedido string, relogio int) (bool, bool,
 	return true, false, "ok"
 }
 
+// Igual ao segurarNa, para o desfazer.
 func (e *Estado) desfazerNa(empresa, idPedido string) (bool, bool, string) {
 	if empresa == e.Empresa {
 		ok, motivo := e.TratarDesfazer(idPedido, e.Empresa)
@@ -427,6 +446,7 @@ func (e *Estado) desfazerNa(empresa, idPedido string) (bool, bool, string) {
 	return true, false, "ok"
 }
 
+// Troca a fase e salva. Se a escrita falhar, a fase na memoria volta ao que era.
 func (e *Estado) gravarFase(id, nova string) error {
 	pedido := e.Pedidos[id]
 	if pedido == nil {
@@ -441,7 +461,8 @@ func (e *Estado) gravarFase(id, nova string) error {
 	return nil
 }
 
-// chamar com a trava na mao.
+// Marca so este id. A limpeza aborta quando o disco voltar.
+// Chamar com a trava na mao. Reserva que ainda esta na rede nao entra aqui.
 func (e *Estado) marcarAbandonado(id string) {
 	if e.Abandonados == nil {
 		e.Abandonados = map[string]bool{}
@@ -449,6 +470,9 @@ func (e *Estado) marcarAbandonado(id string) {
 	e.Abandonados[id] = true
 }
 
+// Grava abortando antes de mandar desfazer.
+// Se essa escrita falhar, marco o pedido e volto, sem falar com ninguem.
+// Confirmando, confirmada, cancelada e abortada eu nao mexo.
 func (e *Estado) AbortarPedido(idPedido string) {
 	e.Trava.Lock()
 	pedido := e.Pedidos[idPedido]
@@ -481,6 +505,8 @@ func (e *Estado) AbortarPedido(idPedido string) {
 	}
 }
 
+// Manda confirmar em cada participante. Se a rede falhar, fico em confirmando e nao aborto.
+// Se todos responderem, gravo a reserva do passageiro.
 func (e *Estado) entregarConfirmacao(idPedido string) (bool, string) {
 	e.Trava.Lock()
 	pedido := e.Pedidos[idPedido]
@@ -542,6 +568,7 @@ func (e *Estado) entregarConfirmacao(idPedido string) (bool, string) {
 	return true, "ok"
 }
 
+// O mesmo trecho duas vezes no pedido debitaria o assento duas vezes.
 func trechoRepetido(trechos []TrechoViagem) string {
 	visto := map[string]bool{}
 	for _, t := range trechos {
@@ -554,6 +581,7 @@ func trechoRepetido(trechos []TrechoViagem) string {
 	return ""
 }
 
+// Troca preco e cidades pelos dados da empresa dona. O cliente nao escolhe o preco.
 func (e *Estado) trechoOficial(t TrechoViagem) (TrechoViagem, string) {
 	if t.Empresa == e.Empresa {
 		e.Trava.Lock()
@@ -598,6 +626,9 @@ func (e *Estado) trechoOficial(t TrechoViagem) (TrechoViagem, string) {
 	return t, "trecho nao existe em " + t.Empresa
 }
 
+// A mesma chave de tentativa. Confirmada devolve a reserva.
+// Abortada ou cancelada e recusa final. Confirmando tenta de novo.
+// O resto responde 202. Nao e recusa.
 func (e *Estado) responderTentativa(fase, idPedido, idReserva string) Resposta {
 	if fase == "confirmando" {
 		ok, motivo := e.entregarConfirmacao(idPedido)
@@ -623,6 +654,7 @@ func (e *Estado) responderTentativa(fase, idPedido, idReserva string) Resposta {
 	return Resposta{Codigo: 202, Mensagem: idPedido, Erro: "reserva ainda em andamento"}
 }
 
+// Procura o pedido deste passageiro com este id. Quem chama ja tem a trava.
 func (e *Estado) acharTentativa(usuario, idTentativa string) (string, string, string, bool) {
 	if idTentativa == "" {
 		return "", "", "", false
@@ -635,6 +667,9 @@ func (e *Estado) acharTentativa(usuario, idTentativa string) (string, string, st
 	return "", "", "", false
 }
 
+// A viagem inteira. Grava segurando, segura em ordem, grava confirmando, confirma.
+// Falha antes de gravar confirmando: aborta. Falha ao gravar a decisao: marco o pedido.
+// Depois que confirmando entrou no disco, timeout vira 202 e nao aborta.
 func (e *Estado) Reservar(usuario, senha, idTentativa string, trechos []TrechoViagem) Resposta {
 	e.Trava.Lock()
 	u, ok := e.Usuarios[usuario]
@@ -764,6 +799,8 @@ func (e *Estado) Reservar(usuario, senha, idTentativa string, trechos []TrechoVi
 	return Resposta{OK: true, Reserva: &copia}
 }
 
+// Grava cancelando, desfaz em todo mundo, e so entao marca cancelada.
+// Se alguem nao responder, a listagem ainda mostra a viagem confirmada.
 func (e *Estado) tentarCancelar(idPedido, idReserva string) (bool, string) {
 	e.Trava.Lock()
 	pedido := e.Pedidos[idPedido]
@@ -817,6 +854,8 @@ func (e *Estado) tentarCancelar(idPedido, idReserva string) (bool, string) {
 	return true, "ok"
 }
 
+// Confere a senha e se a reserva e deste passageiro.
+// Cancelar de novo nao devolve a vaga outra vez.
 func (e *Estado) CancelarReserva(usuario, senha, idReserva string) Resposta {
 	e.Trava.Lock()
 	u, ok := e.Usuarios[usuario]
@@ -852,6 +891,7 @@ func (e *Estado) CancelarReserva(usuario, senha, idReserva string) Resposta {
 	return Resposta{OK: true, Reserva: &copia}
 }
 
+// Conta quantas vezes a empresa ou a carona muda no caminho.
 func contarTrocas(caminho []TrechoViagem) int {
 	if len(caminho) == 0 {
 		return 0
@@ -868,6 +908,8 @@ func contarTrocas(caminho []TrechoViagem) int {
 	return n
 }
 
+// Pede o dia inteiro a cada par. Quem nao responde eu ignoro e sigo com o resto.
+// Devolvo no maximo 8 caminhos, de no maximo 3 trechos.
 func (e *Estado) BuscarItinerarios(origem, destino, data string) Resposta {
 	// peco TODOS os trechos do dia. se eu pedisse so origem e destino,
 	// a empresa do meio (que nao faz a viagem inteira) responderia vazio.

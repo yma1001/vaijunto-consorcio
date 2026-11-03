@@ -14,6 +14,7 @@ import (
 // HTTP em cima de TCP. O enunciado pediu REST entre as empresas.
 // A coordenacao (relogio, segurar, desfazer) esta neste codigo.
 
+// O if das rotas. O log e o metodo e o caminho, sem a query, pra senha nao aparecer.
 func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("[%s] %s %s\n", e.Empresa, r.Method, r.URL.Path)
 	caminho := r.URL.Path
@@ -260,6 +261,8 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	responder(w, 404, Resposta{Erro: "rota nao existe"})
 }
 
+// Le o Basic. O usuario tem que ser uma empresa conhecida e a senha tem que ser SEGREDO.
+// Sem cabecalho, segredo vazio ou senha de conta: 401.
 func (e *Estado) quemAutenticou(r *http.Request) (string, int) {
 	user, senha, ok := r.BasicAuth()
 	if !ok || e.Segredo == "" || senha != e.Segredo || e.urlDa(user) == "" {
@@ -268,8 +271,9 @@ func (e *Estado) quemAutenticou(r *http.Request) (string, int) {
 	return user, 200
 }
 
-// podeMexer: se o pedido ja tem coordenadora gravada, so ela mexe.
-// chamada interna de recuperacao nao passa por aqui.
+// Se o pedido ja tem coordenadora gravada, so ela mexe.
+// Sem seguro ainda, um par autenticado pode registrar o aborto.
+// Chamada interna de recuperacao nao passa por aqui.
 func (e *Estado) podeMexer(quem, idPedido string) bool {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -280,6 +284,7 @@ func (e *Estado) podeMexer(quem, idPedido string) bool {
 	return quem == s.EmpresaCoord
 }
 
+// Devolve ok, o nome da empresa, a regiao e o relogio.
 func (e *Estado) rotaSaude(w http.ResponseWriter) {
 	e.Trava.Lock()
 	valor := e.Relogio.Valor
@@ -292,6 +297,7 @@ func (e *Estado) rotaSaude(w http.ResponseWriter) {
 	})
 }
 
+// Limita o corpo em 1 MB e decodifica. Lixo depois do JSON e erro.
 func lerJSON(w http.ResponseWriter, r *http.Request, destino any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	dec := json.NewDecoder(r.Body)
@@ -305,12 +311,16 @@ func lerJSON(w http.ResponseWriter, r *http.Request, destino any) error {
 	return nil
 }
 
+// Manda JSON em UTF-8 com o status.
 func responder(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
 
+// 200 se deu certo. 401 se o texto fala senha. 404 se nao achei.
+// 409 se fala vaga, segurar, confirmar ou expirou. O resto e 400.
+// Se a resposta ja trouxe um codigo, esse ganha.
 func codigoHTTP(resp Resposta) int {
 	if resp.Codigo != 0 {
 		return resp.Codigo
@@ -331,6 +341,7 @@ func codigoHTTP(resp Resposta) int {
 	return 400
 }
 
+// Cria o servidor HTTP. Timeout de cabecalho: 5 segundos.
 func novoServidor(e *Estado) *http.Server {
 	return &http.Server{
 		Handler:           e,
@@ -351,6 +362,7 @@ func Abrir(e *Estado, addr string) (net.Listener, error) {
 	return ln, nil
 }
 
+// Comeca a atender numa goroutine. O teste usa isso.
 func Comecar(e *Estado, ln net.Listener) *http.Server {
 	srv := novoServidor(e)
 	go func() {
@@ -362,6 +374,7 @@ func Comecar(e *Estado, ln net.Listener) *http.Server {
 	return srv
 }
 
+// Le a variavel PARES no formato nome|url,nome|url.
 func lerPares(texto string) ([]Par, error) {
 	pares := []Par{}
 	texto = strings.TrimSpace(texto)
@@ -385,6 +398,7 @@ func lerPares(texto string) ([]Par, error) {
 	return pares, nil
 }
 
+// Devolve o padrao se a variavel estiver vazia.
 func getenv(nome, padrao string) string {
 	v := strings.TrimSpace(os.Getenv(nome))
 	if v == "" {
@@ -393,6 +407,8 @@ func getenv(nome, padrao string) string {
 	return v
 }
 
+// Le o ambiente, exige SEGREDO, carrega o arquivo, sobe a limpeza e escuta a porta.
+// SEGREDO nao e a senha das contas. Sem ela o processo para.
 func Rodar() {
 	empresa := getenv("EMPRESA", "vaijunto")
 	regiao := getenv("REGIAO", "reconcavo")
