@@ -397,8 +397,11 @@ func (e *Estado) PublicarCarona(usuario, senha string, cidades []string, data, h
 	if vagas < 1 {
 		return Resposta{Erro: "vagas tem que ser pelo menos 1"}
 	}
-	if len(data) != 10 || data[4] != '-' || data[7] != '-' {
+	if _, err := time.Parse("2006-01-02", data); err != nil {
 		return Resposta{Erro: "data tem que ser aaaa-mm-dd"}
+	}
+	if _, err := time.Parse("15:04", hora); err != nil {
+		return Resposta{Erro: "hora tem que ser hh:mm"}
 	}
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
@@ -449,12 +452,12 @@ func (e *Estado) CancelarCarona(usuario, senha, idCarona string) Resposta {
 	return Resposta{OK: true}
 }
 
-func (e *Estado) ListarMinhasCaronas(usuario string) Resposta {
+func (e *Estado) ListarMinhasCaronas(usuario, senha string) Resposta {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
 	u, ok := e.Usuarios[usuario]
-	if !ok || u.Papel != "motorista" {
-		return Resposta{Erro: "so motorista lista as proprias caronas"}
+	if !ok || u.Senha != senha || u.Papel != "motorista" {
+		return Resposta{Erro: "usuario ou senha invalido"}
 	}
 	lista := make([]Carona, 0)
 	for _, c := range e.Caronas {
@@ -478,9 +481,13 @@ type trechoComGente struct {
 	Passageiros []gente `json:"passageiros"`
 }
 
-func (e *Estado) ListarPassageiros(usuario, idCarona string) (Resposta, []trechoComGente) {
+func (e *Estado) ListarPassageiros(usuario, senha, idCarona string) (Resposta, []trechoComGente) {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
+	u, ok := e.Usuarios[usuario]
+	if !ok || u.Senha != senha {
+		return Resposta{Erro: "usuario ou senha invalido"}, nil
+	}
 	c := e.Caronas[idCarona]
 	if c == nil {
 		return Resposta{Erro: "carona nao existe"}, nil
@@ -512,12 +519,12 @@ func (e *Estado) ListarPassageiros(usuario, idCarona string) (Resposta, []trecho
 	return Resposta{OK: true}, saida
 }
 
-func (e *Estado) ListarMinhasReservas(usuario string) Resposta {
+func (e *Estado) ListarMinhasReservas(usuario, senha string) Resposta {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
 	u, ok := e.Usuarios[usuario]
-	if !ok || u.Papel != "passageiro" {
-		return Resposta{Erro: "so passageiro lista reserva"}
+	if !ok || u.Senha != senha || u.Papel != "passageiro" {
+		return Resposta{Erro: "usuario ou senha invalido"}
 	}
 	lista := make([]Reserva, 0)
 	for _, r := range e.Reservas {

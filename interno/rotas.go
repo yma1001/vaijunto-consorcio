@@ -45,12 +45,12 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && caminho == "/minhas-caronas" {
-		resp := e.ListarMinhasCaronas(r.URL.Query().Get("usuario"))
+		resp := e.ListarMinhasCaronas(r.URL.Query().Get("usuario"), r.URL.Query().Get("senha"))
 		responder(w, codigoHTTP(resp), resp)
 		return
 	}
 	if r.Method == http.MethodGet && caminho == "/passageiros" {
-		resp, lista := e.ListarPassageiros(r.URL.Query().Get("usuario"), r.URL.Query().Get("id_carona"))
+		resp, lista := e.ListarPassageiros(r.URL.Query().Get("usuario"), r.URL.Query().Get("senha"), r.URL.Query().Get("id_carona"))
 		if !resp.OK {
 			responder(w, codigoHTTP(resp), resp)
 			return
@@ -59,7 +59,7 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && caminho == "/minhas-reservas" {
-		resp := e.ListarMinhasReservas(r.URL.Query().Get("usuario"))
+		resp := e.ListarMinhasReservas(r.URL.Query().Get("usuario"), r.URL.Query().Get("senha"))
 		responder(w, codigoHTTP(resp), resp)
 		return
 	}
@@ -172,7 +172,7 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			responder(w, 400, Resposta{Erro: "json invalido"})
 			return
 		}
-		ok, motivo := e.TratarConfirmar(corpo.IDPedido, corpo.Relogio, false)
+		ok, motivo := e.TratarConfirmar(corpo.IDPedido, corpo.Empresa, corpo.Relogio)
 		if ok && e.CortarAckConfirmar {
 			hj, pode := w.(http.Hijacker)
 			if pode {
@@ -196,7 +196,7 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			responder(w, 400, Resposta{Erro: "json invalido"})
 			return
 		}
-		ok, motivo := e.TratarDesfazer(corpo.IDPedido)
+		ok, motivo := e.TratarDesfazer(corpo.IDPedido, corpo.Empresa)
 		if ok {
 			responder(w, 200, Resposta{OK: true, Mensagem: motivo})
 			return

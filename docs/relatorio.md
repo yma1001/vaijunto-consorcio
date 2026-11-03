@@ -61,11 +61,10 @@ Protocolo, nesta ordem:
 1. Grava fase `segurando`.
 2. `POST /segurar` em ordem alfabetica (norteminas, sudoeste, vaijunto). Segurar nao baixa vaga.
 3. Se uma recusa ou nao responde, `AbortarPedido` manda `desfazer` em quem ja segurou. O passageiro recebe erro. `vagas_livres` nao mudou.
-4. Grava fase `confirmando` antes de mandar a rede.
-5. `POST /confirmar`. Aí a dona baixa 1. Repetir nao baixa de novo.
-6. Se a resposta do confirmar nao volta (timeout), a fase continua `confirmando`. Nao viro isso em aborto. A limpeza manda o confirmar outra vez.
-7. Se o participante responde que nao confirmou, ai sim `AbortarPedido` desfaz quem ja baixou.
-8. Grava a reserva local como `confirmada` so depois que todo mundo respondeu.
+4. Grava fase `confirmando` antes de mandar a rede. Se essa gravacao falhar, a fase volta para `segurando`.
+5. `POST /confirmar`. Aí a dona baixa 1. O voto `segurado` nao expira nessa hora. Repetir nao baixa de novo.
+6. Se a resposta do confirmar nao volta, ou se o estado que volta nao e o esperado, a fase continua `confirmando`. Nao viro isso em aborto. A limpeza manda o confirmar outra vez. O cliente recebe HTTP 202.
+7. Grava a reserva local como `confirmada` so depois que todo mundo respondeu.
 
 Diagrama de sequencia: `docs/api.md`, secao "Sequencia: reserva com tres empresas".
 
@@ -93,7 +92,9 @@ Antes da confirmacao: a busca nao grava nada. Se o cliente fecha, nao existe ped
 
 Durante o `segurar`: quem ja segurou recebe `desfazer`. A vaga livre nao foi baixada. As empresas que nao participam dessa reserva seguem atendendo. O teste `TestEmpresaCai` mata a sudoeste e confere isso.
 
-Durante o `confirmar`: a fase `confirmando` ja esta no disco. Timeout nao e conflito. O coordenador repete o `POST /confirmar` ate cada empresa responder. Quem ja baixou a vaga responde de novo sem baixar outra. So desfaz se a resposta vier dizendo que nao confirmou.
+Durante o `confirmar`: a fase `confirmando` ja esta no disco. Dali em diante eu so repito o confirmar. Nao aborto. Timeout e resposta estranha ficam pendentes (HTTP 202). Quem ja baixou a vaga responde de novo sem baixar outra.
+
+Se o coordenador de um voto `segurado` ficar mudo, essa vaga continua ocupada. Uma viagem de outra empresa, que nao depende dele, segue normal. O teste `TestCoordenadorMudo` mostra isso.
 
 Depois de `confirmada`: o assento fica no JSON de cada dono. Cair uma empresa nao apaga o que as outras ja confirmaram. Quem nao depende dela continua buscando e reservando.
 
@@ -126,10 +127,14 @@ Automatizado: `go test ./interno -count=1`
 | `TestDisputaSimultanea` | dois servidores ao mesmo tempo na ultima vaga: exatamente um ganha |
 | `TestAckPerdido` | a norteminas grava o confirmar e a resposta se perde. A vaijunto fica `confirmando`. Ao religar a norteminas, a reserva fecha e a vaga baixa uma vez |
 | `TestTrechoDuplicadoESenha` | trecho repetido nao reserva, sem senha nao reserva, o mesmo `id_tentativa` nao compra dois assentos |
+| `TestMesmaTentativa` | dez chamadas ao mesmo tempo com a mesma chave: uma reserva |
+| `TestPrazoNaoAbortaConfirmacao` | janela maior que o prazo: a confirmacao nao vira aborto |
+| `TestGravacaoFalha` | se o disco falha, a fase na memoria volta e o arquivo antigo fica |
+| `TestCoordenadorMudo` | voto prometido fica preso se o coordenador cai; outra empresa ainda reserva |
 
 Carga: `go run ./cmd/simulador 12`, com os tres servidores ja nas portas 5001–5003. O usuario muda a cada execucao. `SIM_EMPRESAS` troca o endereco, no formato `nome|url,nome|url`. A carona de Montes Claros nasce com 1 vaga. O resultado esperado e 1 confirmacao.
 
-Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 4,5s) e `go test -race -count=1 ./...` (ok, 5,6s). Ainda falta repetir a queda no laboratorio, em tres computadores, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
+Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 9,1s) e `go test -race -count=1 ./...` (ok, 11,1s). Ainda falta repetir a queda no laboratorio, em tres computadores, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
 
 ## 11. Emulacao
 

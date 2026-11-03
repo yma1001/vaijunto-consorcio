@@ -93,7 +93,7 @@ func reconciliarSeguros(e *Estado) {
 
 	for _, it := range lista {
 		if it.fase == "esperando" {
-			e.TratarDesfazer(it.id)
+			e.TratarDesfazer(it.id, e.Empresa)
 			continue
 		}
 		estado := ""
@@ -111,11 +111,11 @@ func reconciliarSeguros(e *Estado) {
 			estado = resp.Estado
 		}
 		if estado == "confirmado" {
-			e.TratarConfirmar(it.id, 0, true)
+			e.TratarConfirmar(it.id, e.Empresa, 0)
 			continue
 		}
 		if estado == "abortado" || estado == "desconhecido" {
-			e.TratarDesfazer(it.id)
+			e.TratarDesfazer(it.id, e.Empresa)
 		}
 	}
 }

@@ -140,9 +140,9 @@ func menuMotorista(base, usuario, senha string) {
 		if op == "1" {
 			publicar(base, usuario, senha)
 		} else if op == "2" {
-			minhasCaronas(base, usuario)
+			minhasCaronas(base, usuario, senha)
 		} else if op == "3" {
-			verPassageiros(base, usuario)
+			verPassageiros(base, usuario, senha)
 		} else if op == "4" {
 			cancelarCarona(base, usuario, senha)
 		} else if op == "0" {
@@ -210,9 +210,9 @@ func publicar(base, usuario, senha string) {
 	}
 }
 
-func minhasCaronas(base, usuario string) {
+func minhasCaronas(base, usuario, senha string) {
 	var resp Resposta
-	if !falar("GET", urlComQuery(base, "/minhas-caronas", map[string]string{"usuario": usuario}), nil, &resp) || !resp.OK {
+	if !falar("GET", urlComQuery(base, "/minhas-caronas", map[string]string{"usuario": usuario, "senha": senha}), nil, &resp) || !resp.OK {
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
 		}
@@ -232,7 +232,7 @@ func minhasCaronas(base, usuario string) {
 	}
 }
 
-func verPassageiros(base, usuario string) {
+func verPassageiros(base, usuario, senha string) {
 	id := lerLinha("id da carona: ")
 	var resp struct {
 		OK      bool             `json:"ok"`
@@ -240,7 +240,7 @@ func verPassageiros(base, usuario string) {
 		Trechos []trechoComGente `json:"trechos"`
 	}
 	if !falar("GET", urlComQuery(base, "/passageiros", map[string]string{
-		"usuario": usuario, "id_carona": id,
+		"usuario": usuario, "senha": senha, "id_carona": id,
 	}), nil, &resp) || !resp.OK {
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
@@ -308,6 +308,7 @@ func RodarPassageiro() {
 
 func menuPassageiro(base, usuario, senha string) {
 	var ultima []Itinerario
+	var chave string
 	for {
 		fmt.Println()
 		fmt.Println("passageiro", usuario)
@@ -320,9 +321,9 @@ func menuPassageiro(base, usuario, senha string) {
 		if op == "1" {
 			ultima = buscar(base)
 		} else if op == "2" {
-			reservarOpcao(base, usuario, senha, ultima)
+			reservarOpcao(base, usuario, senha, &chave, ultima)
 		} else if op == "3" {
-			minhasReservas(base, usuario)
+			minhasReservas(base, usuario, senha)
 		} else if op == "4" {
 			cancelar(base, usuario, senha)
 		} else if op == "0" {
@@ -360,7 +361,7 @@ func buscar(base string) []Itinerario {
 	return resp.Itinerarios
 }
 
-func reservarOpcao(base, usuario, senha string, ultima []Itinerario) {
+func reservarOpcao(base, usuario, senha string, chave *string, ultima []Itinerario) {
 	if len(ultima) == 0 {
 		fmt.Println("busca primeiro")
 		return
@@ -371,14 +372,30 @@ func reservarOpcao(base, usuario, senha string, ultima []Itinerario) {
 		return
 	}
 	// mando os trechos de volta. o servidor confere a vaga de novo.
-	// a busca pode ter ficado velha se outra pessoa reservou no meio.
+	// se a tentativa anterior ainda nao fechou, repito a mesma chave.
+	if *chave != "" {
+		fmt.Println("tentativa pendente", *chave, ". consulto ela antes de uma compra nova")
+	} else {
+		*chave = fmt.Sprintf("t-%d", time.Now().UnixNano())
+	}
 	var resp Resposta
-	if !falar("POST", base+"/reservar", map[string]any{
+	status, erroRede := Pedir("POST", base+"/reservar", map[string]any{
 		"usuario":      usuario,
 		"senha":        senha,
-		"id_tentativa": fmt.Sprintf("t-%d", time.Now().UnixNano()),
+		"id_tentativa": *chave,
 		"trechos":      ultima[n-1].Trechos,
-	}, &resp) || !resp.OK {
+	}, 15*time.Second, &resp)
+	if erroRede {
+		fmt.Println("nao consegui falar com o servidor em " + base)
+		return
+	}
+	if status == 202 {
+		fmt.Println("pendente. id do pedido:", resp.Mensagem)
+		fmt.Println("a proxima reserva repete esta chave")
+		return
+	}
+	*chave = ""
+	if !resp.OK {
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
 		}
@@ -389,9 +406,9 @@ func reservarOpcao(base, usuario, senha string, ultima []Itinerario) {
 	}
 }
 
-func minhasReservas(base, usuario string) {
+func minhasReservas(base, usuario, senha string) {
 	var resp Resposta
-	if !falar("GET", urlComQuery(base, "/minhas-reservas", map[string]string{"usuario": usuario}), nil, &resp) || !resp.OK {
+	if !falar("GET", urlComQuery(base, "/minhas-reservas", map[string]string{"usuario": usuario, "senha": senha}), nil, &resp) || !resp.OK {
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
 		}

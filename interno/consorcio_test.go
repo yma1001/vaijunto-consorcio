@@ -489,3 +489,165 @@ func TestTrechoDuplicadoESenha(t *testing.T) {
 	checar(t, deNovo.OK, "a mesma tentativa devolve a mesma reserva")
 	checar(t, vagaBruta(tr, "vaijunto", "Salvador", "Cachoeira") == 1, "nao comprou o assento duas vezes")
 }
+
+func reservasDo(tr *trio, empresa, passageiro string) int {
+	e := tr.estado(empresa)
+	e.Trava.Lock()
+	defer e.Trava.Unlock()
+	n := 0
+	for _, r := range e.Reservas {
+		if r.Passageiro == passageiro && r.Status == "confirmada" {
+			n = n + 1
+		}
+	}
+	return n
+}
+
+func TestMesmaTentativa(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 30*time.Millisecond, 3*time.Second)
+	defer tr.derrubar()
+	busca := buscarRota(tr.url("sudoeste"), "Feira de Santana", "Vitória da Conquista")
+	if len(busca.Itinerarios) == 0 || len(busca.Itinerarios[0].Trechos) == 0 {
+		t.Fatal("sem trecho da sudoeste")
+	}
+	corpo := map[string]any{
+		"usuario":      "passageiro1",
+		"senha":        "senha123",
+		"id_tentativa": "compra-unica",
+		"trechos":      busca.Itinerarios[0].Trechos,
+	}
+	ch := make(chan int, 10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			var resp Resposta
+			status, _ := Pedir("POST", tr.url("vaijunto")+"/reservar", corpo, 12*time.Second, &resp)
+			if resp.OK {
+				ch <- 200
+				return
+			}
+			ch <- status
+		}()
+	}
+	ok := 0
+	for i := 0; i < 10; i++ {
+		if <-ch == 200 {
+			ok = ok + 1
+		}
+	}
+	checar(t, ok >= 1, "uma das chamadas fechou a compra")
+	checar(t, reservasDo(tr, "vaijunto", "passageiro1") == 1, "a mesma chave gerou uma reserva so")
+	checar(t, vagaBruta(tr, "sudoeste", "Feira de Santana", "Vitória da Conquista") == 2, "saiu um assento dos tres")
+}
+
+func TestPrazoNaoAbortaConfirmacao(t *testing.T) {
+	tr := subirTrio(t, time.Second, 750*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	busca := buscarRota(tr.url("vaijunto"), "Salvador", "Montes Claros")
+	caminho := acharCaminho(busca.Itinerarios)
+	if caminho == nil {
+		t.Fatal("sem caminho")
+	}
+	var resp Resposta
+	status, erro := Pedir("POST", tr.url("vaijunto")+"/reservar", map[string]any{
+		"usuario": "passageiro1",
+		"senha":   "senha123",
+		"trechos": caminho,
+	}, 20*time.Second, &resp)
+	checar(t, !erro, "a reserva respondeu")
+	checar(t, resp.OK || status == 202, "nao recusou por prazo")
+	checar(t, tr.fase("vaijunto", "passageiro1") != "abortada", "a decisao nao virou aborto")
+	limite := time.Now().Add(8 * time.Second)
+	for time.Now().Before(limite) && tr.fase("vaijunto", "passageiro1") != "confirmada" {
+		time.Sleep(200 * time.Millisecond)
+	}
+	checar(t, tr.fase("vaijunto", "passageiro1") == "confirmada", "a confirmacao fechou")
+	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 0, "a ultima vaga baixou uma vez")
+}
+
+func TestGravacaoFalha(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	e := tr.estado("vaijunto")
+	e.Trava.Lock()
+	e.Pedidos["p1"] = &Pedido{IDPedido: "p1", Fase: "segurando", Passageiro: "passageiro1"}
+	err := e.Salvar()
+	e.Trava.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := e.Arquivo
+	e.Arquivo = filepath.Join(original, "nao.json")
+	e.Trava.Lock()
+	err = e.gravarFase("p1", "confirmando")
+	fase := e.Pedidos["p1"].Fase
+	e.Trava.Unlock()
+	checar(t, err != nil, "a escrita falhou")
+	checar(t, fase == "segurando", "a memoria voltou para segurando")
+
+	e.Arquivo = original
+	outro := NovoEstado(e.Empresa, e.Regiao, original, e.URLPropria, e.Pares, e.Expira, e.Janela, e.Timeout)
+	if err := outro.CarregarOuSemear(); err != nil {
+		t.Fatal(err)
+	}
+	checar(t, outro.Pedidos["p1"] != nil && outro.Pedidos["p1"].Fase == "segurando", "o disco continua segurando")
+
+	var lista Resposta
+	Pedir("GET", tr.url("vaijunto")+"/consorcio/trechos?data=2026-10-30", nil, 3*time.Second, &lista)
+	var cachoeira TrechoViagem
+	for _, tch := range lista.Trechos {
+		if NormalizarCidade(tch.Destino) == NormalizarCidade("Cachoeira") {
+			cachoeira = tch
+		}
+	}
+	corpo := CorpoSegurar{
+		IDPedido:     "pedido-grava",
+		Relogio:      1,
+		EmpresaCoord: "vaijunto",
+		Passageiro:   "passageiro1",
+		Trechos:      []RefTrecho{{IDCarona: cachoeira.IDCarona, Indice: cachoeira.Indice}},
+	}
+	var segurou Resposta
+	_, erroRede := Pedir("POST", tr.url("vaijunto")+"/consorcio/segurar", corpo, 4*time.Second, &segurou)
+	checar(t, !erroRede && segurou.OK, "segurou para testar o desfazer")
+	e.Arquivo = filepath.Join(original, "nao.json")
+	ok, _ := e.TratarDesfazer("pedido-grava", "vaijunto")
+	checar(t, !ok, "desfazer nao mente sucesso se nao gravou")
+	e.Trava.Lock()
+	estado := ""
+	if e.Seguros["pedido-grava"] != nil {
+		estado = e.Seguros["pedido-grava"].Estado
+	}
+	e.Trava.Unlock()
+	checar(t, estado == "segurado", "o seguro continua segurado na memoria")
+}
+
+func TestCoordenadorMudo(t *testing.T) {
+	tr := subirTrio(t, 1500*time.Millisecond, 20*time.Millisecond, 400*time.Millisecond)
+	defer tr.derrubar()
+	var lista Resposta
+	Pedir("GET", tr.url("norteminas")+"/consorcio/trechos?data=2026-10-30", nil, 3*time.Second, &lista)
+	if len(lista.Trechos) == 0 {
+		t.Fatal("sem trecho")
+	}
+	trecho := lista.Trechos[0]
+	corpo := CorpoSegurar{
+		IDPedido:     "pedido-mudo",
+		Relogio:      1,
+		EmpresaCoord: "vaijunto",
+		Passageiro:   "passageiro1",
+		Trechos:      []RefTrecho{{IDCarona: trecho.IDCarona, Indice: trecho.Indice}},
+	}
+	var segurou Resposta
+	_, erro := Pedir("POST", tr.url("norteminas")+"/consorcio/segurar", corpo, 4*time.Second, &segurou)
+	checar(t, !erro && segurou.OK, "a norteminas segurou")
+	tr.derrubarEmpresa("vaijunto")
+	time.Sleep(2 * time.Second)
+	checar(t, vaga(t, tr.url("norteminas"), "Vitória da Conquista", "Montes Claros") == 0, "com o coordenador mudo a vaga prometida fica")
+	busca := buscarRota(tr.url("sudoeste"), "Feira de Santana", "Vitória da Conquista")
+	if len(busca.Itinerarios) == 0 {
+		t.Fatal("sem viagem da sudoeste")
+	}
+	resp := reservar(tr.url("sudoeste"), "passageiro2", busca.Itinerarios[0].Trechos)
+	checar(t, resp.OK, "uma viagem que nao depende da vaijunto ainda fecha")
+	checar(t, vagaBruta(tr, "sudoeste", "Feira de Santana", "Vitória da Conquista") == 2, "a sudoeste baixou a vaga dela")
+}

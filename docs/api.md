@@ -167,6 +167,10 @@ so entao a vaijunto grava a reserva
 
 O cliente pode mandar de novo o mesmo `id_tentativa`. A segunda chamada acha o pedido e nao compra outro assento.
 
+Se o confirmar ainda nao fechou, a resposta e HTTP 202 e o corpo traz o id do pedido em `mensagem`. Nao e recusa. A mesma chave consulta de novo.
+
+Depois do voto `segurado`, o prazo nao recusa o confirmar. O prazo so solta quem ainda esta `esperando`.
+
 ## Precedencia da ultima vaga
 
 Os dois POST /segurar chegam no dono do trecho. Ele espera JANELA_MS
