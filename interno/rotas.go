@@ -94,6 +94,7 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost && caminho == "/caronas" {
 		var corpo struct {
 			Usuario string   `json:"usuario"`
+			Senha   string   `json:"senha"`
 			Cidades []string `json:"cidades"`
 			Data    string   `json:"data"`
 			Hora    string   `json:"hora"`
@@ -104,46 +105,50 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			responder(w, 400, Resposta{Erro: "json invalido"})
 			return
 		}
-		resp := e.PublicarCarona(corpo.Usuario, corpo.Cidades, corpo.Data, corpo.Hora, corpo.Vagas, corpo.Precos)
+		resp := e.PublicarCarona(corpo.Usuario, corpo.Senha, corpo.Cidades, corpo.Data, corpo.Hora, corpo.Vagas, corpo.Precos)
 		responder(w, codigoHTTP(resp), resp)
 		return
 	}
 	if r.Method == http.MethodPost && caminho == "/cancelar-carona" {
 		var corpo struct {
 			Usuario  string `json:"usuario"`
+			Senha    string `json:"senha"`
 			IDCarona string `json:"id_carona"`
 		}
 		if err := lerJSON(w, r, &corpo); err != nil {
 			responder(w, 400, Resposta{Erro: "json invalido"})
 			return
 		}
-		resp := e.CancelarCarona(corpo.Usuario, corpo.IDCarona)
+		resp := e.CancelarCarona(corpo.Usuario, corpo.Senha, corpo.IDCarona)
 		responder(w, codigoHTTP(resp), resp)
 		return
 	}
 	if r.Method == http.MethodPost && caminho == "/reservar" {
 		var corpo struct {
-			Usuario string         `json:"usuario"`
-			Trechos []TrechoViagem `json:"trechos"`
+			Usuario     string         `json:"usuario"`
+			Senha       string         `json:"senha"`
+			IDTentativa string         `json:"id_tentativa"`
+			Trechos     []TrechoViagem `json:"trechos"`
 		}
 		if err := lerJSON(w, r, &corpo); err != nil {
 			responder(w, 400, Resposta{Erro: "json invalido"})
 			return
 		}
-		resp := e.Reservar(corpo.Usuario, corpo.Trechos)
+		resp := e.Reservar(corpo.Usuario, corpo.Senha, corpo.IDTentativa, corpo.Trechos)
 		responder(w, codigoHTTP(resp), resp)
 		return
 	}
 	if r.Method == http.MethodPost && caminho == "/cancelar-reserva" {
 		var corpo struct {
 			Usuario   string `json:"usuario"`
+			Senha     string `json:"senha"`
 			IDReserva string `json:"id_reserva"`
 		}
 		if err := lerJSON(w, r, &corpo); err != nil {
 			responder(w, 400, Resposta{Erro: "json invalido"})
 			return
 		}
-		resp := e.CancelarReserva(corpo.Usuario, corpo.IDReserva)
+		resp := e.CancelarReserva(corpo.Usuario, corpo.Senha, corpo.IDReserva)
 		responder(w, codigoHTTP(resp), resp)
 		return
 	}
@@ -168,6 +173,16 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ok, motivo := e.TratarConfirmar(corpo.IDPedido, corpo.Relogio, false)
+		if ok && e.CortarAckConfirmar {
+			hj, pode := w.(http.Hijacker)
+			if pode {
+				conn, _, err := hj.Hijack()
+				if err == nil {
+					conn.Close()
+					return
+				}
+			}
+		}
 		if ok {
 			responder(w, 200, Resposta{OK: true, Mensagem: motivo})
 			return
@@ -208,7 +223,14 @@ func (e *Estado) rotaSaude(w http.ResponseWriter) {
 func lerJSON(w http.ResponseWriter, r *http.Request, destino any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	dec := json.NewDecoder(r.Body)
-	return dec.Decode(destino)
+	err := dec.Decode(destino)
+	if err != nil {
+		return err
+	}
+	if dec.More() {
+		return fmt.Errorf("json com lixo no final")
+	}
+	return nil
 }
 
 func responder(w http.ResponseWriter, status int, v any) {
@@ -218,6 +240,9 @@ func responder(w http.ResponseWriter, status int, v any) {
 }
 
 func codigoHTTP(resp Resposta) int {
+	if resp.Codigo != 0 {
+		return resp.Codigo
+	}
 	if resp.OK {
 		return 200
 	}

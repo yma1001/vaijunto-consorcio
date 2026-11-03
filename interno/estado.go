@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -92,6 +93,7 @@ type Pedido struct {
 	Fase          string         `json:"fase"`
 	Passageiro    string         `json:"passageiro"`
 	Relogio       int            `json:"relogio"`
+	IDTentativa   string         `json:"id_tentativa,omitempty"`
 	Trechos       []TrechoViagem `json:"trechos"`
 	Participantes []Par          `json:"participantes"`
 }
@@ -106,6 +108,7 @@ type Resposta struct {
 	OK          bool           `json:"ok"`
 	Erro        string         `json:"erro,omitempty"`
 	Mensagem    string         `json:"mensagem,omitempty"`
+	Codigo      int            `json:"-"`
 	Empresa     string         `json:"empresa,omitempty"`
 	Regiao      string         `json:"regiao,omitempty"`
 	Usuario     string         `json:"usuario,omitempty"`
@@ -131,23 +134,24 @@ type gravacao struct {
 }
 
 type Estado struct {
-	Trava      sync.Mutex
-	Empresa    string
-	Regiao     string
-	Arquivo    string
-	URLPropria string
-	Pares      []Par
-	Expira     time.Duration
-	Janela     time.Duration
-	Timeout    time.Duration
-	Relogio    Relogio
-	Usuarios   map[string]Usuario
-	Caronas    map[string]*Carona
-	Reservas   map[string]*Reserva
-	Seguros    map[string]*Seguro
-	Pedidos    map[string]*Pedido
-	Contador   int
-	Ligado     bool
+	Trava              sync.Mutex
+	Empresa            string
+	Regiao             string
+	Arquivo            string
+	URLPropria         string
+	Pares              []Par
+	Expira             time.Duration
+	Janela             time.Duration
+	Timeout            time.Duration
+	Relogio            Relogio
+	Usuarios           map[string]Usuario
+	Caronas            map[string]*Carona
+	Reservas           map[string]*Reserva
+	Seguros            map[string]*Seguro
+	Pedidos            map[string]*Pedido
+	Contador           int
+	Ligado             bool
+	CortarAckConfirmar bool
 }
 
 func NovoEstado(empresa, regiao, arquivo, urlPropria string, pares []Par, expira, janela, timeout time.Duration) *Estado {
@@ -194,7 +198,8 @@ func (e *Estado) ProximoID(prefixo string) string {
 
 // Salvar assume a trava na mao.
 // Escreve .tmp e troca o nome. Se morrer no meio do write, o arquivo antigo fica.
-func (e *Estado) Salvar() {
+// Se a troca falhar, o arquivo anterior continua no lugar.
+func (e *Estado) Salvar() error {
 	g := gravacao{
 		Usuarios: e.Usuarios,
 		Caronas:  e.Caronas,
@@ -211,13 +216,13 @@ func (e *Estado) Salvar() {
 	bruto, err := json.MarshalIndent(g, "", "  ")
 	if err != nil {
 		fmt.Println("["+e.Empresa+"] erro ao montar json:", err)
-		return
+		return err
 	}
 	tmp := e.Arquivo + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
 		fmt.Println("["+e.Empresa+"] erro ao criar arquivo:", err)
-		return
+		return err
 	}
 	_, err = f.Write(bruto)
 	if err == nil {
@@ -226,17 +231,26 @@ func (e *Estado) Salvar() {
 	f.Close()
 	if err != nil {
 		fmt.Println("["+e.Empresa+"] erro ao gravar:", err)
-		return
+		os.Remove(tmp)
+		return err
 	}
 	err = os.Rename(tmp, e.Arquivo)
 	if err != nil {
-		// no Windows o rename as vezes nao cobre arquivo que ja existe
-		os.Remove(e.Arquivo)
-		err = os.Rename(tmp, e.Arquivo)
+		bak := e.Arquivo + ".bak"
+		if ren := os.Rename(e.Arquivo, bak); ren == nil {
+			err = os.Rename(tmp, e.Arquivo)
+			if err != nil {
+				os.Rename(bak, e.Arquivo)
+			} else {
+				os.Remove(bak)
+			}
+		}
 	}
 	if err != nil {
 		fmt.Println("["+e.Empresa+"] erro ao trocar arquivo:", err)
+		return err
 	}
+	return nil
 }
 
 func (e *Estado) CarregarOuSemear() error {
@@ -244,8 +258,11 @@ func (e *Estado) CarregarOuSemear() error {
 	if os.IsNotExist(err) {
 		e.semear()
 		e.Trava.Lock()
-		e.Salvar()
+		err = e.Salvar()
 		e.Trava.Unlock()
+		if err != nil {
+			return err
+		}
 		fmt.Println("[" + e.Empresa + "] arquivo novo em " + e.Arquivo)
 		return nil
 	}
@@ -353,36 +370,59 @@ func (e *Estado) Cadastrar(usuario, senha, papel string) Resposta {
 	}
 	e.Usuarios[usuario] = Usuario{Senha: senha, Papel: papel}
 	e.Relogio.Tic()
-	e.Salvar()
+	if err := e.Salvar(); err != nil {
+		delete(e.Usuarios, usuario)
+		return Resposta{Erro: "nao consegui gravar"}
+	}
 	return Resposta{OK: true, Usuario: usuario, Papel: papel}
 }
 
-func (e *Estado) PublicarCarona(usuario string, cidades []string, data, hora string, vagas int, precos []int) Resposta {
+func (e *Estado) PublicarCarona(usuario, senha string, cidades []string, data, hora string, vagas int, precos []int) Resposta {
 	if len(cidades) < 2 {
 		return Resposta{Erro: "precisa de pelo menos duas cidades"}
+	}
+	for _, cidade := range cidades {
+		if strings.TrimSpace(cidade) == "" {
+			return Resposta{Erro: "cidade vazia"}
+		}
 	}
 	if len(precos) != len(cidades)-1 {
 		return Resposta{Erro: "um preco por trecho (quantidade de cidades menos 1)"}
 	}
+	for _, preco := range precos {
+		if preco < 0 {
+			return Resposta{Erro: "preco nao pode ser negativo"}
+		}
+	}
 	if vagas < 1 {
 		return Resposta{Erro: "vagas tem que ser pelo menos 1"}
+	}
+	if len(data) != 10 || data[4] != '-' || data[7] != '-' {
+		return Resposta{Erro: "data tem que ser aaaa-mm-dd"}
 	}
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
 	u, ok := e.Usuarios[usuario]
-	if !ok || u.Papel != "motorista" {
-		return Resposta{Erro: "so motorista publica carona"}
+	if !ok || u.Senha != senha || u.Papel != "motorista" {
+		return Resposta{Erro: "usuario ou senha invalido"}
 	}
 	id := e.criarCarona(usuario, cidades, data, hora, vagas, precos)
 	e.Relogio.Tic()
-	e.Salvar()
+	if err := e.Salvar(); err != nil {
+		delete(e.Caronas, id)
+		return Resposta{Erro: "nao consegui gravar"}
+	}
 	copia := copiarCarona(e.Caronas[id])
 	return Resposta{OK: true, Carona: &copia}
 }
 
-func (e *Estado) CancelarCarona(usuario, idCarona string) Resposta {
+func (e *Estado) CancelarCarona(usuario, senha, idCarona string) Resposta {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
+	u, tem := e.Usuarios[usuario]
+	if !tem || u.Senha != senha {
+		return Resposta{Erro: "usuario ou senha invalido"}
+	}
 	c := e.Caronas[idCarona]
 	if c == nil {
 		return Resposta{Erro: "carona nao existe"}
@@ -391,18 +431,21 @@ func (e *Estado) CancelarCarona(usuario, idCarona string) Resposta {
 		return Resposta{Erro: "essa carona nao e sua"}
 	}
 	for _, s := range e.Seguros {
-		if s.Estado != "confirmado" {
+		if s.Estado != "confirmado" && s.Estado != "segurado" {
 			continue
 		}
 		for _, t := range s.Trechos {
 			if t.IDCarona == idCarona {
-				return Resposta{Erro: "tem passageiro confirmado, nao cancelei"}
+				return Resposta{Erro: "tem passageiro nesta carona, nao cancelei"}
 			}
 		}
 	}
 	c.Status = "cancelada"
 	e.Relogio.Tic()
-	e.Salvar()
+	if err := e.Salvar(); err != nil {
+		c.Status = "ativa"
+		return Resposta{Erro: "nao consegui gravar"}
+	}
 	return Resposta{OK: true}
 }
 
@@ -499,16 +542,12 @@ func (e *Estado) AcharTrecho(idCarona string, indice int) *TrechoCarona {
 	return nil
 }
 
-// VagasOcupadas conta seguro ainda valendo. confirmado ja baixou vagas_livres,
-// entao nao conta de novo. trava na mao.
+// VagasOcupadas conta seguro prometido (segurado). confirmado ja baixou vagas_livres.
+// Promessa vencida continua contando ate a limpeza saber a decisao. trava na mao.
 func (e *Estado) VagasOcupadas(idCarona string, indice int) int {
-	agora := time.Now()
 	ocupadas := 0
 	for _, s := range e.Seguros {
 		if s.Estado != "segurado" {
-			continue
-		}
-		if s.Expira.Before(agora) {
 			continue
 		}
 		for _, t := range s.Trechos {

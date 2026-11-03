@@ -49,15 +49,15 @@ Cada trecho diz a empresa e a regiao.
 
 ### POST /reservar
 ```json
-{"usuario": "passageiro1", "trechos": [ {"empresa": "vaijunto", "id_carona": "carona-vaijunto-1", "indice": 0, "origem": "Salvador", "destino": "Feira de Santana", "preco": 25} ]}
+{"usuario": "passageiro1", "senha": "senha123", "id_tentativa": "t-1", "trechos": [ {"empresa": "vaijunto", "id_carona": "carona-vaijunto-1", "indice": 0, "origem": "Salvador", "destino": "Feira de Santana", "preco": 25} ]}
 ```
-O normal e mandar os trechos que a busca devolveu. O servidor confere de novo se ainda tem vaga.
+O normal e mandar os trechos que a busca devolveu. O servidor troca preco e cidades pelos dados da empresa dona. Sem a senha da conta, recusa. O mesmo `id_tentativa` nao compra outro assento.
 
 ### GET /minhas-reservas?usuario=passageiro1
 
 ### POST /cancelar-reserva
 ```json
-{"usuario": "passageiro1", "id_reserva": "reserva-vaijunto-4"}
+{"usuario": "passageiro1", "senha": "senha123", "id_reserva": "reserva-vaijunto-4"}
 ```
 Manda desfazer em todas as empresas do itinerario. Chamar de novo nao devolve a vaga outra vez.
 
@@ -154,6 +154,18 @@ vaijunto grava abortada
 passageiro recebe erro
 nenhuma vaga_livres foi baixada
 ```
+
+Se o confirmar da norteminas grava a vaga e a resposta se perde:
+
+```
+norteminas ja baixou 1 e ficou confirmado no arquivo dela
+vaijunto NAO grava abortada. fica em confirmando
+a limpeza repete POST /confirmar
+norteminas responde "ja confirmado" e nao baixa de novo
+so entao a vaijunto grava a reserva
+```
+
+O cliente pode mandar de novo o mesmo `id_tentativa`. A segunda chamada acha o pedido e nao compra outro assento.
 
 ## Precedencia da ultima vaga
 

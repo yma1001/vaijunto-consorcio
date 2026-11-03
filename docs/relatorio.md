@@ -62,9 +62,10 @@ Protocolo, nesta ordem:
 2. `POST /segurar` em ordem alfabetica (norteminas, sudoeste, vaijunto). Segurar nao baixa vaga.
 3. Se uma recusa ou nao responde, `AbortarPedido` manda `desfazer` em quem ja segurou. O passageiro recebe erro. `vagas_livres` nao mudou.
 4. Grava fase `confirmando` antes de mandar a rede.
-5. `POST /confirmar`. Aí a dona baixa 1.
-6. Se um confirmar falha, desfaz inclusive quem ja baixou.
-7. Grava a reserva local como `confirmada`.
+5. `POST /confirmar`. Aí a dona baixa 1. Repetir nao baixa de novo.
+6. Se a resposta do confirmar nao volta (timeout), a fase continua `confirmando`. Nao viro isso em aborto. A limpeza manda o confirmar outra vez.
+7. Se o participante responde que nao confirmou, ai sim `AbortarPedido` desfaz quem ja baixou.
+8. Grava a reserva local como `confirmada` so depois que todo mundo respondeu.
 
 Diagrama de sequencia: `docs/api.md`, secao "Sequencia: reserva com tres empresas".
 
@@ -92,7 +93,7 @@ Antes da confirmacao: a busca nao grava nada. Se o cliente fecha, nao existe ped
 
 Durante o `segurar`: quem ja segurou recebe `desfazer`. A vaga livre nao foi baixada. As empresas que nao participam dessa reserva seguem atendendo. O teste `TestEmpresaCai` mata a sudoeste e confere isso.
 
-Durante o `confirmar`: a fase `confirmando` ja esta no disco. Se o coordenador morre ali, o item 9 retoma. Se um participante recusa, desfaz todos, inclusive quem ja baixou.
+Durante o `confirmar`: a fase `confirmando` ja esta no disco. Timeout nao e conflito. O coordenador repete o `POST /confirmar` ate cada empresa responder. Quem ja baixou a vaga responde de novo sem baixar outra. So desfaz se a resposta vier dizendo que nao confirmou.
 
 Depois de `confirmada`: o assento fica no JSON de cada dono. Cair uma empresa nao apaga o que as outras ja confirmaram. Quem nao depende dela continua buscando e reservando.
 
@@ -104,12 +105,12 @@ Momento: `Salvar` e chamado antes de mandar `segurar`, de novo ao mudar pra `con
 
 Ao voltar, `Rodar` carrega o arquivo, sobe a limpeza e chama `AoSubir` (`interno/recuperacao.go`):
 
-- `segurando` ou `abortando`: aborta e desfaz
-- `confirmando`: confirma de novo (repetir nao baixa duas vezes). Se um participante perdeu o seguro, desfaz todo mundo
-- `abortada`: desfaz de novo
+- `segurando`: aborta e desfaz
+- `confirmando`: confirma de novo. Timeout deixa a fase quieta. Repetir nao baixa duas vezes
+- `abortando` ou `cancelando`: repete ate todo mundo responder. So entao grava `abortada` ou `cancelada`
 - `confirmada`: nao mexe
 
-Seguro `segurado` ou `esperando` vencido: pergunta `GET /consorcio/pedido`. Se alguem ja confirmou, confirma tambem. Se ninguem responder, solta. Prefere perder a reserva a deixar assento preso.
+Seguro `esperando` vencido: solta, porque a vaga ainda nao foi prometida. Seguro `segurado` vencido: pergunta `GET /consorcio/pedido` no coordenador. `confirmado` confirma. `abortado` ou `desconhecido` solta. Se o coordenador nao responder, espera. Nao solta no silencio.
 
 ## 10. Testes
 
@@ -120,13 +121,15 @@ Automatizado: `go test ./interno -count=1`
 | `TestJSONRuim` | JSON quebrado volta 400 e nao mexe vaga |
 | `TestBuscaEReserva` | itinerario das tres empresas, baixa 1 em cada, o segundo falha, Cachoeira continua 2 |
 | `TestCancelarDevolve` | cancelar devolve uma vez so |
-| `TestEmpresaCai` | injeta falha: derruba a sudoeste no meio |
-| `TestSeguroExpira` | segurou e nao confirmou: a vaga volta |
+| `TestEmpresaCai` | derruba a sudoeste antes da reserva: a viagem falha e a vaga livre nao muda |
+| `TestSeguroExpira` | segurou e o coordenador nao tem o pedido: depois do prazo a vaga volta |
 | `TestDisputaSimultanea` | dois servidores ao mesmo tempo na ultima vaga: exatamente um ganha |
+| `TestAckPerdido` | a norteminas grava o confirmar e a resposta se perde. A vaijunto fica `confirmando`. Ao religar a norteminas, a reserva fecha e a vaga baixa uma vez |
+| `TestTrechoDuplicadoESenha` | trecho repetido nao reserva, sem senha nao reserva, o mesmo `id_tentativa` nao compra dois assentos |
 
-Carga: `go run ./cmd/simulador 12`, com os tres servidores ja nas portas 5001–5003. Varios passageiros buscam Salvador -> Montes Claros e reservam juntos. A carona de Montes Claros nasce com 1 vaga. O resultado esperado e 1 confirmacao. Mais de uma e falha de atomicidade.
+Carga: `go run ./cmd/simulador 12`, com os tres servidores ja nas portas 5001–5003. O usuario muda a cada execucao. `SIM_EMPRESAS` troca o endereco, no formato `nome|url,nome|url`. A carona de Montes Claros nasce com 1 vaga. O resultado esperado e 1 confirmacao.
 
-Resultado do `go test ./interno -count=1` nesta maquina: passou (`ok vaijunto/interno`).
+Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 4,5s) e `go test -race -count=1 ./...` (ok, 5,6s). Ainda falta repetir a queda no laboratorio, em tres computadores, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
 
 ## 11. Emulacao
 
@@ -134,4 +137,4 @@ Resultado do `go test ./interno -count=1` nesta maquina: passou (`ok vaijunto/in
 
 Na mesma maquina, eles se acham pelo nome do servico (`http://sudoeste:5002`). No laboratorio, um container por PC: troca `URL_PROPRIA` e `PARES` pelo IP da placa. `127.0.0.1` nao atravessa computador. `HOST=0.0.0.0` pra aceitar conexao de fora.
 
-Pra provocar a falha na apresentacao: `docker stop sudoeste` (ou fechar o terminal dela, se estiver sem Docker). Mostrar que `GET` de Cachoeira na vaijunto ainda responde, e que reservar Salvador -> Montes Claros falha e nao deixa vaga presa. Religar: `docker start sudoeste`. Ela le `/data/estado.json` e `AoSubir` continua de onde a fase parou.
+Pra provocar a falha na apresentacao, da pasta `emulacao`: `docker compose stop sudoeste` (ou fechar o terminal dela, se estiver sem Docker). Mostrar que a busca Salvador -> Cachoeira na vaijunto ainda responde, e que reservar Salvador -> Montes Claros falha sem baixar `vagas_livres`. Religar: `docker compose start sudoeste`. Ela le o volume dela e `AoSubir` continua da fase gravada. Os tres PCs do laboratorio eu ainda nao liguei juntos. O artigo da SBC fica fora deste codigo.

@@ -3,6 +3,8 @@ package interno
 import (
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -13,8 +15,10 @@ import (
 // Segurar NAO baixa vagas_livres. So marca.
 //
 // Fase 2, CONFIRMAR. So mando depois que todas seguraram.
-// Ai o dono baixa a vaga. Se um confirmar falhar, desfaz inclusive
-// quem ja tinha baixado.
+// Gravo "confirmando" antes de mandar. Se a resposta se perder,
+// repito o confirmar. Quem ja baixou a vaga responde de novo sem baixar outra.
+// So desfazo se a outra empresa responder que nao confirmou.
+// Timeout nao e conflito: fico em "confirmando" e tento de novo.
 //
 // A ordem alfabetica evita deadlock: todo mundo pede norteminas,
 // depois sudoeste, depois vaijunto. Ninguem segura A esperando B
@@ -147,6 +151,23 @@ func (e *Estado) TratarSegurar(c CorpoSegurar) (bool, string) {
 		e.Trava.Unlock()
 		return false, "sem vaga"
 	}
+	if ja != nil && ja.Estado == "abortado" {
+		e.Trava.Unlock()
+		return false, "pedido ja abortado"
+	}
+	if c.EmpresaCoord != "" && c.EmpresaCoord != e.Empresa && e.urlDa(c.EmpresaCoord) == "" {
+		e.Trava.Unlock()
+		return false, "nao conheco a empresa " + c.EmpresaCoord
+	}
+	vistos := map[string]bool{}
+	for _, t := range c.Trechos {
+		chave := t.IDCarona + "|" + strconv.Itoa(t.Indice)
+		if vistos[chave] {
+			e.Trava.Unlock()
+			return false, "trecho repetido"
+		}
+		vistos[chave] = true
+	}
 	for _, t := range c.Trechos {
 		if e.AcharTrecho(t.IDCarona, t.Indice) == nil {
 			e.Trava.Unlock()
@@ -165,7 +186,11 @@ func (e *Estado) TratarSegurar(c CorpoSegurar) (bool, string) {
 			Estado:        "esperando",
 			Expira:        time.Now().Add(e.Expira),
 		}
-		e.Salvar()
+		if err := e.Salvar(); err != nil {
+			delete(e.Seguros, c.IDPedido)
+			e.Trava.Unlock()
+			return false, "nao consegui gravar"
+		}
 	}
 	e.Trava.Unlock()
 
@@ -185,7 +210,9 @@ func (e *Estado) TratarSegurar(c CorpoSegurar) (bool, string) {
 		return false, "sem vaga"
 	}
 	seguro.Expira = time.Now().Add(e.Expira)
-	e.Salvar()
+	if err := e.Salvar(); err != nil {
+		return false, "nao consegui gravar"
+	}
 	return true, "ok"
 }
 
@@ -212,7 +239,13 @@ func (e *Estado) TratarConfirmar(idPedido string, relogio int, ignorarExpira boo
 	if !ignorarExpira && s.Expira.Before(time.Now()) {
 		return false, "expirou"
 	}
+	vistos := map[string]bool{}
 	for _, t := range s.Trechos {
+		chave := t.IDCarona + "|" + strconv.Itoa(t.Indice)
+		if vistos[chave] {
+			return false, "trecho repetido"
+		}
+		vistos[chave] = true
 		trecho := e.AcharTrecho(t.IDCarona, t.Indice)
 		if trecho == nil || trecho.VagasLivres < 1 {
 			return false, "sem vaga na confirmacao"
@@ -225,7 +258,16 @@ func (e *Estado) TratarConfirmar(idPedido string, relogio int, ignorarExpira boo
 	s.Estado = "confirmado"
 	s.Expira = time.Time{}
 	e.Relogio.Tic()
-	e.Salvar()
+	if err := e.Salvar(); err != nil {
+		for _, t := range s.Trechos {
+			trecho := e.AcharTrecho(t.IDCarona, t.Indice)
+			if trecho != nil {
+				trecho.VagasLivres = trecho.VagasLivres + 1
+			}
+		}
+		s.Estado = "segurado"
+		return false, "nao consegui gravar"
+	}
 	return true, "ok"
 }
 
@@ -236,10 +278,19 @@ func (e *Estado) TratarDesfazer(idPedido string) (bool, string) {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
 	s := e.Seguros[idPedido]
-	if s == nil || s.Estado == "abortado" {
+	if s != nil && s.Estado == "abortado" {
 		return true, "nada a desfazer"
 	}
-	if s.Estado == "confirmado" {
+	if s == nil {
+		e.Seguros[idPedido] = &Seguro{IDPedido: idPedido, Estado: "abortado"}
+		if err := e.Salvar(); err != nil {
+			delete(e.Seguros, idPedido)
+			return false, "nao consegui gravar"
+		}
+		return true, "nada a desfazer"
+	}
+	eraConfirmado := s.Estado == "confirmado"
+	if eraConfirmado {
 		for _, t := range s.Trechos {
 			trecho := e.AcharTrecho(t.IDCarona, t.Indice)
 			if trecho == nil {
@@ -254,139 +305,332 @@ func (e *Estado) TratarDesfazer(idPedido string) (bool, string) {
 	}
 	s.Estado = "abortado"
 	e.Relogio.Tic()
-	e.Salvar()
+	if err := e.Salvar(); err != nil {
+		if eraConfirmado {
+			for _, t := range s.Trechos {
+				trecho := e.AcharTrecho(t.IDCarona, t.Indice)
+				if trecho != nil && trecho.VagasLivres > 0 {
+					trecho.VagasLivres = trecho.VagasLivres - 1
+				}
+			}
+			s.Estado = "confirmado"
+		}
+		return false, "nao consegui gravar"
+	}
 	return true, "ok"
 }
 
 func (e *Estado) ConsultarPedido(idPedido string) string {
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
-	s := e.Seguros[idPedido]
-	if s != nil {
-		if s.Estado == "confirmado" {
+	p := e.Pedidos[idPedido]
+	if p != nil {
+		if p.Fase == "confirmada" || p.Fase == "confirmando" {
 			return "confirmado"
 		}
-		if s.Estado == "abortado" || s.Estado == "negado" {
+		if p.Fase == "abortada" || p.Fase == "abortando" || p.Fase == "cancelada" || p.Fase == "cancelando" {
 			return "abortado"
 		}
-		return "segurado"
+		return "pendente"
 	}
-	p := e.Pedidos[idPedido]
-	if p == nil {
+	s := e.Seguros[idPedido]
+	if s == nil {
 		return "desconhecido"
 	}
-	if p.Fase == "confirmada" {
+	if s.Estado == "confirmado" {
 		return "confirmado"
 	}
-	if p.Fase == "abortada" || p.Fase == "abortando" {
+	if s.Estado == "abortado" || s.Estado == "negado" {
 		return "abortado"
 	}
-	return "pendente"
+	return "segurado"
 }
 
-func (e *Estado) segurarNa(empresa string, c CorpoSegurar) (bool, string) {
+func (e *Estado) segurarNa(empresa string, c CorpoSegurar) (bool, bool, string) {
 	if empresa == e.Empresa {
-		return e.TratarSegurar(c)
+		ok, motivo := e.TratarSegurar(c)
+		return ok, false, motivo
 	}
 	url := e.urlDa(empresa)
 	if url == "" {
-		return false, "nao conheco a empresa " + empresa
+		return false, false, "nao conheco a empresa " + empresa
 	}
 	var resp Resposta
 	_, erroRede := Pedir("POST", url+"/consorcio/segurar", c, e.Timeout, &resp)
 	if erroRede {
-		return false, "sem resposta de " + empresa
+		return false, true, "sem resposta de " + empresa
 	}
 	if !resp.OK {
 		if resp.Erro == "" {
 			resp.Erro = "falhou em " + empresa
 		}
-		return false, resp.Erro
+		return false, false, resp.Erro
 	}
-	return true, "ok"
+	return true, false, "ok"
 }
 
-func (e *Estado) confirmarNa(empresa, idPedido string, relogio int) (bool, string) {
+func (e *Estado) confirmarNa(empresa, idPedido string, relogio int) (bool, bool, string) {
 	if empresa == e.Empresa {
-		return e.TratarConfirmar(idPedido, relogio, false)
+		ok, motivo := e.TratarConfirmar(idPedido, relogio, true)
+		return ok, false, motivo
 	}
 	url := e.urlDa(empresa)
 	if url == "" {
-		return false, "nao conheco a empresa " + empresa
+		return false, false, "nao conheco a empresa " + empresa
 	}
 	var resp Resposta
 	_, erroRede := Pedir("POST", url+"/consorcio/confirmar", corpoID{IDPedido: idPedido, Relogio: relogio}, e.Timeout, &resp)
 	if erroRede {
-		return false, "sem resposta de " + empresa
+		return false, true, "sem resposta de " + empresa
 	}
 	if !resp.OK {
 		if resp.Erro == "" {
 			resp.Erro = "falhou em " + empresa
 		}
-		return false, resp.Erro
+		return false, false, resp.Erro
 	}
-	return true, "ok"
+	return true, false, "ok"
 }
 
-func (e *Estado) desfazerNa(empresa, idPedido string) (bool, string) {
+func (e *Estado) desfazerNa(empresa, idPedido string) (bool, bool, string) {
 	if empresa == e.Empresa {
-		return e.TratarDesfazer(idPedido)
+		ok, motivo := e.TratarDesfazer(idPedido)
+		return ok, false, motivo
 	}
 	url := e.urlDa(empresa)
 	if url == "" {
-		return false, "nao conheco a empresa " + empresa
+		return false, false, "nao conheco a empresa " + empresa
 	}
 	var resp Resposta
 	_, erroRede := Pedir("POST", url+"/consorcio/desfazer", corpoID{IDPedido: idPedido}, e.Timeout, &resp)
 	if erroRede {
-		return false, "sem resposta de " + empresa
+		return false, true, "sem resposta de " + empresa
 	}
 	if !resp.OK {
 		if resp.Erro == "" {
 			resp.Erro = "falhou em " + empresa
 		}
-		return false, resp.Erro
+		return false, false, resp.Erro
 	}
-	return true, "ok"
+	return true, false, "ok"
 }
 
 func (e *Estado) AbortarPedido(idPedido string) {
 	e.Trava.Lock()
 	pedido := e.Pedidos[idPedido]
-	if pedido == nil {
+	if pedido == nil || pedido.Fase == "abortada" || pedido.Fase == "confirmada" || pedido.Fase == "cancelada" {
 		e.Trava.Unlock()
 		return
 	}
 	participantes := append([]Par(nil), pedido.Participantes...)
 	pedido.Fase = "abortando"
-	e.Salvar()
+	err := e.Salvar()
 	e.Trava.Unlock()
+	if err != nil {
+		return
+	}
 
 	for _, p := range participantes {
-		e.desfazerNa(p.Empresa, idPedido)
+		ok, rede, motivo := e.desfazerNa(p.Empresa, idPedido)
+		if !ok || rede {
+			fmt.Printf("[%s] desfazer de %s ainda pendente: %s\n", e.Empresa, p.Empresa, motivo)
+			return
+		}
 	}
 
 	e.Trava.Lock()
 	pedido = e.Pedidos[idPedido]
-	if pedido != nil {
+	if pedido != nil && pedido.Fase == "abortando" {
 		pedido.Fase = "abortada"
 		e.Salvar()
 	}
 	e.Trava.Unlock()
 }
 
-func (e *Estado) Reservar(usuario string, trechos []TrechoViagem) Resposta {
+func (e *Estado) entregarConfirmacao(idPedido string) (bool, string) {
+	e.Trava.Lock()
+	pedido := e.Pedidos[idPedido]
+	if pedido == nil {
+		e.Trava.Unlock()
+		return false, "pedido sumiu"
+	}
+	if pedido.Fase == "confirmada" {
+		e.Trava.Unlock()
+		return true, "ok"
+	}
+	if pedido.Fase != "confirmando" {
+		e.Trava.Unlock()
+		return false, "nao estou confirmando"
+	}
+	partes := append([]Par(nil), pedido.Participantes...)
+	relogio := pedido.Relogio
+	e.Trava.Unlock()
+
+	for _, p := range partes {
+		ok, rede, motivo := e.confirmarNa(p.Empresa, idPedido, relogio)
+		if rede {
+			return false, "sem resposta de " + p.Empresa
+		}
+		if !ok {
+			return false, motivo
+		}
+	}
+
+	e.Trava.Lock()
+	pedido = e.Pedidos[idPedido]
+	if pedido == nil || pedido.Fase != "confirmando" {
+		e.Trava.Unlock()
+		return false, "pedido mudou"
+	}
+	criou := false
+	if e.Reservas[pedido.IDReserva] == nil {
+		criou = true
+		e.Reservas[pedido.IDReserva] = &Reserva{
+			ID:         pedido.IDReserva,
+			IDPedido:   pedido.IDPedido,
+			Passageiro: pedido.Passageiro,
+			Status:     "confirmada",
+			PrecoTotal: somarPreco(pedido.Trechos),
+			Trechos:    pedido.Trechos,
+		}
+	}
+	pedido.Fase = "confirmada"
+	err := e.Salvar()
+	if err != nil {
+		pedido.Fase = "confirmando"
+		if criou {
+			delete(e.Reservas, pedido.IDReserva)
+		}
+		e.Trava.Unlock()
+		return false, "nao consegui gravar"
+	}
+	e.Trava.Unlock()
+	return true, "ok"
+}
+
+func trechoRepetido(trechos []TrechoViagem) string {
+	visto := map[string]bool{}
+	for _, t := range trechos {
+		chave := t.Empresa + "|" + t.IDCarona + "|" + strconv.Itoa(t.Indice)
+		if visto[chave] {
+			return "trecho repetido na reserva"
+		}
+		visto[chave] = true
+	}
+	return ""
+}
+
+func (e *Estado) trechoOficial(t TrechoViagem) (TrechoViagem, string) {
+	if t.Empresa == e.Empresa {
+		e.Trava.Lock()
+		tr := e.AcharTrecho(t.IDCarona, t.Indice)
+		if tr == nil {
+			e.Trava.Unlock()
+			return t, "trecho nao existe"
+		}
+		c := e.Caronas[t.IDCarona]
+		t.Origem = tr.Origem
+		t.Destino = tr.Destino
+		t.Preco = tr.Preco
+		t.Vagas = tr.VagasLivres
+		if c != nil {
+			t.Data = c.Data
+			t.Hora = c.Hora
+		}
+		e.Trava.Unlock()
+		if t.Preco < 0 || t.Origem == "" || t.Destino == "" {
+			return t, "trecho invalido"
+		}
+		return t, ""
+	}
+	url := e.urlDa(t.Empresa)
+	if url == "" {
+		return t, "nao conheco a empresa " + t.Empresa
+	}
+	var resp Resposta
+	_, rede := Pedir("GET", url+"/consorcio/trechos?data="+escapar(t.Data), nil, e.Timeout, &resp)
+	if rede || !resp.OK {
+		return t, "sem dados oficiais de " + t.Empresa
+	}
+	for _, pub := range resp.Trechos {
+		if pub.IDCarona == t.IDCarona && pub.Indice == t.Indice {
+			pub.Empresa = t.Empresa
+			if pub.Preco < 0 || pub.Origem == "" || pub.Destino == "" {
+				return t, "trecho invalido"
+			}
+			return pub, ""
+		}
+	}
+	return t, "trecho nao existe em " + t.Empresa
+}
+
+func (e *Estado) responderTentativa(fase, idPedido, idReserva string) Resposta {
+	if fase == "confirmando" {
+		ok, motivo := e.entregarConfirmacao(idPedido)
+		if !ok {
+			return Resposta{Erro: "reserva ainda em andamento: " + motivo}
+		}
+		fase = "confirmada"
+	}
+	if fase == "confirmada" {
+		e.Trava.Lock()
+		r := e.Reservas[idReserva]
+		if r == nil {
+			e.Trava.Unlock()
+			return Resposta{Erro: "nao achei a reserva"}
+		}
+		copia := copiarReserva(r)
+		e.Trava.Unlock()
+		return Resposta{OK: true, Reserva: &copia}
+	}
+	if fase == "abortada" || fase == "abortando" || fase == "cancelada" || fase == "cancelando" {
+		return Resposta{Erro: "essa tentativa ja foi recusada"}
+	}
+	return Resposta{Erro: "reserva ainda em andamento"}
+}
+
+func (e *Estado) Reservar(usuario, senha, idTentativa string, trechos []TrechoViagem) Resposta {
 	e.Trava.Lock()
 	u, ok := e.Usuarios[usuario]
-	if !ok || u.Papel != "passageiro" {
+	if !ok || u.Papel != "passageiro" || u.Senha != senha {
 		e.Trava.Unlock()
-		return Resposta{Erro: "usuario nao e passageiro desta empresa"}
+		return Resposta{Erro: "usuario ou senha invalido"}
 	}
-	erro := validarCadeia(trechos)
-	if erro != "" {
-		e.Trava.Unlock()
-		return Resposta{Erro: erro}
+	if idTentativa != "" {
+		for _, p := range e.Pedidos {
+			if p.Passageiro == usuario && p.IDTentativa == idTentativa {
+				fase := p.Fase
+				idPedido := p.IDPedido
+				idReserva := p.IDReserva
+				e.Trava.Unlock()
+				return e.responderTentativa(fase, idPedido, idReserva)
+			}
+		}
 	}
+	e.Trava.Unlock()
+
+	if msg := trechoRepetido(trechos); msg != "" {
+		return Resposta{Erro: msg}
+	}
+	oficiais := make([]TrechoViagem, 0, len(trechos))
+	for _, t := range trechos {
+		oficial, msg := e.trechoOficial(t)
+		if msg != "" {
+			return Resposta{Erro: msg}
+		}
+		oficiais = append(oficiais, oficial)
+	}
+	trechos = oficiais
+	if msg := validarCadeia(trechos); msg != "" {
+		return Resposta{Erro: msg}
+	}
+	for _, t := range trechos {
+		if t.Preco < 0 {
+			return Resposta{Erro: "preco nao pode ser negativo"}
+		}
+	}
+
+	e.Trava.Lock()
 	grupos := agruparPorEmpresa(trechos)
 	participantes := make([]Par, 0, len(grupos))
 	for _, g := range grupos {
@@ -397,7 +641,6 @@ func (e *Estado) Reservar(usuario string, trechos []TrechoViagem) Resposta {
 		}
 		participantes = append(participantes, Par{Empresa: g.empresa, URL: url})
 	}
-	// um tic so. a viagem inteira tem o mesmo numero de precedencia.
 	relogio := e.Relogio.Tic()
 	idPedido := e.ProximoID("pedido")
 	idReserva := e.ProximoID("reserva")
@@ -407,10 +650,15 @@ func (e *Estado) Reservar(usuario string, trechos []TrechoViagem) Resposta {
 		Fase:          "segurando",
 		Passageiro:    usuario,
 		Relogio:       relogio,
+		IDTentativa:   idTentativa,
 		Trechos:       trechos,
 		Participantes: participantes,
 	}
-	e.Salvar()
+	if err := e.Salvar(); err != nil {
+		delete(e.Pedidos, idPedido)
+		e.Trava.Unlock()
+		return Resposta{Erro: "nao consegui gravar"}
+	}
 	e.Trava.Unlock()
 
 	fmt.Printf("[%s] segurando %s relogio=%d\n", e.Empresa, idPedido, relogio)
@@ -429,52 +677,97 @@ func (e *Estado) Reservar(usuario string, trechos []TrechoViagem) Resposta {
 			Participantes: participantes,
 			Trechos:       refs,
 		}
-		ok, motivo := e.segurarNa(g.empresa, corpo)
-		if !ok {
+		segurou, _, motivo := e.segurarNa(g.empresa, corpo)
+		if !segurou {
 			fmt.Printf("[%s] nao segurou em %s: %s\n", e.Empresa, g.empresa, motivo)
 			e.AbortarPedido(idPedido)
 			return Resposta{Erro: "nao consegui segurar em " + g.empresa + ": " + motivo}
 		}
 	}
 
-	// gravo confirmando ANTES de mandar o confirmar.
-	// se eu morrer agora, na subida eu continuo, nao deixo metade.
 	e.Trava.Lock()
-	e.Pedidos[idPedido].Fase = "confirmando"
-	e.Salvar()
-	e.Trava.Unlock()
-
-	for _, g := range grupos {
-		ok, motivo := e.confirmarNa(g.empresa, idPedido, relogio)
-		if !ok {
-			fmt.Printf("[%s] nao confirmou em %s: %s\n", e.Empresa, g.empresa, motivo)
-			e.AbortarPedido(idPedido)
-			return Resposta{Erro: "falhou ao confirmar em " + g.empresa + ": " + motivo}
+	if e.Pedidos[idPedido] != nil {
+		e.Pedidos[idPedido].Fase = "confirmando"
+		err := e.Salvar()
+		e.Trava.Unlock()
+		if err != nil {
+			return Resposta{Erro: "nao consegui gravar a confirmacao"}
 		}
+	} else {
+		e.Trava.Unlock()
+		return Resposta{Erro: "pedido sumiu"}
+	}
+
+	okConf, motivo := e.entregarConfirmacao(idPedido)
+	if !okConf {
+		fmt.Printf("[%s] confirmar pendente: %s\n", e.Empresa, motivo)
+		if strings.Contains(motivo, "sem resposta") || strings.Contains(motivo, "gravar") {
+			return Resposta{Erro: "confirmei mas a resposta nao fechou. manda de novo com o mesmo id"}
+		}
+		e.AbortarPedido(idPedido)
+		return Resposta{Erro: "falhou ao confirmar: " + motivo}
 	}
 
 	e.Trava.Lock()
-	preco := somarPreco(trechos)
-	reserva := &Reserva{
-		ID:         idReserva,
-		IDPedido:   idPedido,
-		Passageiro: usuario,
-		Status:     "confirmada",
-		PrecoTotal: preco,
-		Trechos:    trechos,
+	reserva := e.Reservas[idReserva]
+	var copia Reserva
+	if reserva != nil {
+		copia = copiarReserva(reserva)
 	}
-	e.Reservas[idReserva] = reserva
-	e.Pedidos[idPedido].Fase = "confirmada"
-	e.Relogio.Tic()
-	e.Salvar()
-	copia := copiarReserva(reserva)
 	e.Trava.Unlock()
 	fmt.Printf("[%s] reserva confirmada %s\n", e.Empresa, idReserva)
 	return Resposta{OK: true, Reserva: &copia}
 }
 
-func (e *Estado) CancelarReserva(usuario, idReserva string) Resposta {
+func (e *Estado) tentarCancelar(idPedido, idReserva string) (bool, string) {
 	e.Trava.Lock()
+	pedido := e.Pedidos[idPedido]
+	if pedido == nil {
+		e.Trava.Unlock()
+		return false, "nao achei o pedido dessa reserva"
+	}
+	if pedido.Fase == "cancelada" {
+		e.Trava.Unlock()
+		return true, "ok"
+	}
+	participantes := append([]Par(nil), pedido.Participantes...)
+	pedido.Fase = "cancelando"
+	err := e.Salvar()
+	e.Trava.Unlock()
+	if err != nil {
+		return false, "nao consegui gravar"
+	}
+
+	for _, p := range participantes {
+		ok, rede, motivo := e.desfazerNa(p.Empresa, idPedido)
+		if !ok || rede {
+			return false, p.Empresa + " (" + motivo + ")"
+		}
+	}
+
+	e.Trava.Lock()
+	r := e.Reservas[idReserva]
+	if r != nil {
+		r.Status = "cancelada"
+	}
+	if e.Pedidos[idPedido] != nil {
+		e.Pedidos[idPedido].Fase = "cancelada"
+	}
+	err = e.Salvar()
+	e.Trava.Unlock()
+	if err != nil {
+		return false, "nao consegui gravar"
+	}
+	return true, "ok"
+}
+
+func (e *Estado) CancelarReserva(usuario, senha, idReserva string) Resposta {
+	e.Trava.Lock()
+	u, ok := e.Usuarios[usuario]
+	if !ok || u.Senha != senha {
+		e.Trava.Unlock()
+		return Resposta{Erro: "usuario ou senha invalido"}
+	}
 	r := e.Reservas[idReserva]
 	if r == nil {
 		e.Trava.Unlock()
@@ -489,39 +782,34 @@ func (e *Estado) CancelarReserva(usuario, idReserva string) Resposta {
 		e.Trava.Unlock()
 		return Resposta{OK: true, Reserva: &copia}
 	}
-	pedido := e.Pedidos[r.IDPedido]
-	if pedido == nil {
-		e.Trava.Unlock()
-		return Resposta{Erro: "nao achei o pedido dessa reserva"}
-	}
-	participantes := append([]Par(nil), pedido.Participantes...)
 	idPedido := r.IDPedido
 	e.Trava.Unlock()
 
-	erros := ""
-	for _, p := range participantes {
-		ok, motivo := e.desfazerNa(p.Empresa, idPedido)
-		if !ok {
-			if erros != "" {
-				erros = erros + ", "
-			}
-			erros = erros + p.Empresa + " (" + motivo + ")"
-		}
+	conseguiu, motivo := e.tentarCancelar(idPedido, idReserva)
+	if !conseguiu {
+		return Resposta{Erro: "nao consegui cancelar em: " + motivo}
 	}
-	if erros != "" {
-		return Resposta{Erro: "nao consegui cancelar em: " + erros}
-	}
-
 	e.Trava.Lock()
 	r = e.Reservas[idReserva]
-	r.Status = "cancelada"
-	if e.Pedidos[idPedido] != nil {
-		e.Pedidos[idPedido].Fase = "abortada"
-	}
-	e.Salvar()
 	copia := copiarReserva(r)
 	e.Trava.Unlock()
 	return Resposta{OK: true, Reserva: &copia}
+}
+
+func contarTrocas(caminho []TrechoViagem) int {
+	if len(caminho) == 0 {
+		return 0
+	}
+	n := 0
+	anterior := caminho[0].Empresa + "|" + caminho[0].IDCarona
+	for _, t := range caminho[1:] {
+		chave := t.Empresa + "|" + t.IDCarona
+		if chave != anterior {
+			n = n + 1
+		}
+		anterior = chave
+	}
+	return n
 }
 
 func (e *Estado) BuscarItinerarios(origem, destino, data string) Resposta {
@@ -542,7 +830,7 @@ func (e *Estado) BuscarItinerarios(origem, destino, data string) Resposta {
 	for _, caminho := range caminhos {
 		its = append(its, Itinerario{
 			PrecoTotal: somarPreco(caminho),
-			Trocas:     len(caminho) - 1,
+			Trocas:     contarTrocas(caminho),
 			Trechos:    caminho,
 		})
 	}

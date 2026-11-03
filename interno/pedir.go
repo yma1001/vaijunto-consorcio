@@ -36,7 +36,9 @@ func Pedir(metodo, url string, corpo any, timeout time.Duration, destino any) (i
 	}
 	defer resp.Body.Close()
 	if destino != nil {
-		json.NewDecoder(resp.Body).Decode(destino)
+		if err := json.NewDecoder(resp.Body).Decode(destino); err != nil {
+			return resp.StatusCode, true
+		}
 	}
 	return resp.StatusCode, false
 }

@@ -150,6 +150,7 @@ func reservar(base, usuario string, trechos []TrechoViagem) Resposta {
 	var resp Resposta
 	Pedir("POST", base+"/reservar", map[string]any{
 		"usuario": usuario,
+		"senha":   "senha123",
 		"trechos": trechos,
 	}, 8*time.Second, &resp)
 	return resp
@@ -233,13 +234,13 @@ func TestCancelarDevolve(t *testing.T) {
 	checar(t, vaga(t, tr.url("vaijunto"), "Salvador", "Cachoeira") == 1, "foi de 2 pra 1")
 	var resp2 Resposta
 	Pedir("POST", tr.url("vaijunto")+"/cancelar-reserva", map[string]string{
-		"usuario": "passageiro1", "id_reserva": resp.Reserva.ID,
+		"usuario": "passageiro1", "senha": "senha123", "id_reserva": resp.Reserva.ID,
 	}, 5*time.Second, &resp2)
 	checar(t, resp2.OK, "cancelou")
 	checar(t, vaga(t, tr.url("vaijunto"), "Salvador", "Cachoeira") == 2, "vaga voltou")
 	var resp3 Resposta
 	Pedir("POST", tr.url("vaijunto")+"/cancelar-reserva", map[string]string{
-		"usuario": "passageiro1", "id_reserva": resp.Reserva.ID,
+		"usuario": "passageiro1", "senha": "senha123", "id_reserva": resp.Reserva.ID,
 	}, 5*time.Second, &resp3)
 	checar(t, resp3.OK, "cancelar de novo nao da erro")
 	checar(t, vaga(t, tr.url("vaijunto"), "Salvador", "Cachoeira") == 2, "nao devolveu vaga duas vezes")
@@ -326,4 +327,165 @@ func TestDisputaSimultanea(t *testing.T) {
 	checar(t, vaga(t, tr.url("norteminas"), "Vitória da Conquista", "Montes Claros") == 0, "sobrou zero, nao menos que zero")
 	checar(t, vaga(t, tr.url("vaijunto"), "Salvador", "Feira de Santana") == 2, "so um assento saiu da vaijunto")
 	checar(t, vaga(t, tr.url("sudoeste"), "Feira de Santana", "Vitória da Conquista") == 2, "so um assento saiu da sudoeste")
+}
+
+func (tr *trio) estado(empresa string) *Estado {
+	for _, e := range tr.estados {
+		if e.Empresa == empresa {
+			return e
+		}
+	}
+	return nil
+}
+
+func (tr *trio) reiniciar(t *testing.T, empresa string) {
+	t.Helper()
+	for i, e := range tr.estados {
+		if e.Empresa != empresa {
+			continue
+		}
+		addr := tr.lns[i].Addr().String()
+		arquivo := e.Arquivo
+		regiao := e.Regiao
+		url := e.URLPropria
+		pares := append([]Par(nil), e.Pares...)
+		expira, janela, timeout := e.Expira, e.Janela, e.Timeout
+		e.Parar()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		tr.srvs[i].Shutdown(ctx)
+		cancel()
+		novo := NovoEstado(empresa, regiao, arquivo, url, pares, expira, janela, timeout)
+		if err := novo.CarregarOuSemear(); err != nil {
+			t.Fatal(err)
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go LoopLimpeza(novo)
+		AoSubir(novo)
+		tr.estados[i] = novo
+		tr.lns[i] = ln
+		tr.srvs[i] = Comecar(novo, ln)
+		tr.mortos[empresa] = false
+		esperarSaude(t, url)
+		return
+	}
+	t.Fatal("nao achei " + empresa)
+}
+
+func (tr *trio) fase(empresa, passageiro string) string {
+	e := tr.estado(empresa)
+	if e == nil {
+		return ""
+	}
+	e.Trava.Lock()
+	defer e.Trava.Unlock()
+	for _, p := range e.Pedidos {
+		if p.Passageiro == passageiro {
+			return p.Fase
+		}
+	}
+	return ""
+}
+
+func vagaBruta(tr *trio, empresa, origem, destino string) int {
+	e := tr.estado(empresa)
+	if e == nil {
+		return -1
+	}
+	e.Trava.Lock()
+	defer e.Trava.Unlock()
+	for _, c := range e.Caronas {
+		for _, t := range c.Trechos {
+			if NormalizarCidade(t.Origem) == NormalizarCidade(origem) && NormalizarCidade(t.Destino) == NormalizarCidade(destino) {
+				return t.VagasLivres
+			}
+		}
+	}
+	return -1
+}
+
+func TestAckPerdido(t *testing.T) {
+	tr := subirTrio(t, 30*time.Second, 20*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	busca := buscarRota(tr.url("vaijunto"), "Salvador", "Montes Claros")
+	caminho := acharCaminho(busca.Itinerarios)
+	if caminho == nil {
+		t.Fatal("sem caminho")
+	}
+	norte := tr.estado("norteminas")
+	norte.CortarAckConfirmar = true
+	resp := reservar(tr.url("vaijunto"), "passageiro1", caminho)
+	checar(t, !resp.OK, "o coordenador nao recebeu o ack")
+	checar(t, tr.fase("vaijunto", "passageiro1") == "confirmando", "a vaijunto ficou confirmando, nao abortou")
+	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 0, "a norteminas ja tinha baixado a vaga")
+
+	tr.reiniciar(t, "norteminas")
+	limite := time.Now().Add(8 * time.Second)
+	for time.Now().Before(limite) {
+		if tr.fase("vaijunto", "passageiro1") == "confirmada" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	checar(t, tr.fase("vaijunto", "passageiro1") == "confirmada", "a repeticao fechou a reserva")
+	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 0, "a vaga nao baixou duas vezes")
+	checar(t, vagaBruta(tr, "vaijunto", "Salvador", "Feira de Santana") == 2, "vaijunto baixou uma")
+	checar(t, vagaBruta(tr, "sudoeste", "Feira de Santana", "Vitória da Conquista") == 2, "sudoeste baixou uma")
+}
+
+func TestTrechoDuplicadoESenha(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	var lista Resposta
+	Pedir("GET", tr.url("norteminas")+"/consorcio/trechos?data=2026-10-30", nil, 3*time.Second, &lista)
+	if len(lista.Trechos) == 0 {
+		t.Fatal("sem trecho")
+	}
+	ruim := lista.Trechos[0]
+	ruim.Preco = -7
+	ruim.Origem = "X"
+	ruim.Destino = "Y"
+	copia := ruim
+	copia.Origem = "Y"
+	copia.Destino = "Z"
+	var resp Resposta
+	Pedir("POST", tr.url("vaijunto")+"/reservar", map[string]any{
+		"usuario": "passageiro1",
+		"senha":   "senha123",
+		"trechos": []TrechoViagem{ruim, copia},
+	}, 5*time.Second, &resp)
+	checar(t, !resp.OK, "trecho repetido nao reserva")
+	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 1, "vaga bruta continua 1")
+
+	Pedir("POST", tr.url("vaijunto")+"/reservar", map[string]any{
+		"usuario": "passageiro1",
+		"trechos": []TrechoViagem{lista.Trechos[0]},
+	}, 5*time.Second, &resp)
+	checar(t, !resp.OK, "sem senha nao reserva")
+
+	var locais Resposta
+	Pedir("GET", tr.url("vaijunto")+"/consorcio/trechos?data=2026-10-30", nil, 3*time.Second, &locais)
+	var cachoeira TrechoViagem
+	achou := false
+	for _, tch := range locais.Trechos {
+		if NormalizarCidade(tch.Destino) == NormalizarCidade("Cachoeira") {
+			cachoeira = tch
+			achou = true
+		}
+	}
+	checar(t, achou, "achei cachoeira")
+	corpo := map[string]any{
+		"usuario":      "passageiro1",
+		"senha":        "senha123",
+		"id_tentativa": "tenta-1",
+		"trechos":      []TrechoViagem{cachoeira},
+	}
+	Pedir("POST", tr.url("vaijunto")+"/reservar", corpo, 5*time.Second, &resp)
+	checar(t, resp.OK, "primeira tentativa reservou")
+	var deNovo Resposta
+	Pedir("POST", tr.url("vaijunto")+"/reservar", corpo, 5*time.Second, &deNovo)
+	checar(t, deNovo.OK, "a mesma tentativa devolve a mesma reserva")
+	checar(t, vagaBruta(tr, "vaijunto", "Salvador", "Cachoeira") == 1, "nao comprou o assento duas vezes")
 }

@@ -12,117 +12,110 @@ func escapar(s string) string {
 
 // Queda e volta.
 //
-// fase segurando  -> ainda nao confirmei. na volta eu aborto.
-// fase confirmando -> ja decidi confirmar (gravei antes de mandar).
-//                    na volta eu confirmo de novo. repetir nao baixa vaga duas vezes.
-//                    se alguem perdeu o seguro, ai eu desfaco todo mundo.
-// fase confirmada -> nao mexo.
-// fase abortada   -> mando desfazer de novo, porque o outro pode ter estado morto.
+// fase segurando   -> ainda nao confirmei. na volta eu aborto.
+// fase confirmando -> a decisao ja esta no arquivo. repito o confirmar.
+//                    timeout nao vira aborto. quem ja baixou a vaga responde de novo.
+// fase abortando   -> repito o desfazer ate todo mundo responder.
+// fase cancelando  -> o passageiro pediu pra sair. so marco cancelada quando todos respondem.
+// fase confirmada  -> nao mexo.
 //
-// Seguro vencido: pergunto pros participantes se alguem confirmou.
-// se sim, confirmo tambem. se ninguem responder, solto a vaga.
-// prefiro perder a reserva do que deixar assento preso pra sempre.
+// Seguro vencido e ainda so "esperando": solto, porque eu nao prometi a vaga.
+// Seguro "segurado": pergunto ao coordenador. confirmado eu confirmo.
+// abortado ou desconhecido eu solto. se ele nao responder, espero.
 
 func AoSubir(e *Estado) {
 	e.Trava.Lock()
-	pedidos := make([]*Pedido, 0, len(e.Pedidos))
+	var segurando []string
 	for _, p := range e.Pedidos {
-		pedidos = append(pedidos, p)
-	}
-	e.Trava.Unlock()
-
-	for _, p := range pedidos {
-		if p.Fase == "segurando" || p.Fase == "abortando" {
-			fmt.Printf("[%s] retomei %s e vou abortar\n", e.Empresa, p.IDPedido)
-			e.AbortarPedido(p.IDPedido)
-		} else if p.Fase == "confirmando" {
-			fmt.Printf("[%s] retomei %s e vou confirmar de novo\n", e.Empresa, p.IDPedido)
-			retomarConfirmacao(e, p)
-		} else if p.Fase == "abortada" {
-			for _, parte := range p.Participantes {
-				e.desfazerNa(parte.Empresa, p.IDPedido)
-			}
+		if p.Fase == "segurando" {
+			segurando = append(segurando, p.IDPedido)
 		}
 	}
+	e.Trava.Unlock()
+	for _, id := range segurando {
+		fmt.Printf("[%s] retomei %s e vou abortar\n", e.Empresa, id)
+		e.AbortarPedido(id)
+	}
+	retomarPendentes(e)
 	reconciliarSeguros(e)
 }
 
-func retomarConfirmacao(e *Estado, pedido *Pedido) {
-	for _, parte := range pedido.Participantes {
-		ok, motivo := e.confirmarNa(parte.Empresa, pedido.IDPedido, pedido.Relogio)
-		if !ok {
-			fmt.Printf("[%s] retomada falhou em %s: %s\n", e.Empresa, parte.Empresa, motivo)
-			e.AbortarPedido(pedido.IDPedido)
-			return
-		}
-	}
+func retomarPendentes(e *Estado) {
 	e.Trava.Lock()
-	defer e.Trava.Unlock()
-	atual := e.Pedidos[pedido.IDPedido]
-	if atual == nil || atual.Fase == "abortada" {
-		return
+	var confirmar []string
+	var abortar []string
+	type canc struct {
+		pedido  string
+		reserva string
 	}
-	if e.Reservas[atual.IDReserva] == nil {
-		e.Reservas[atual.IDReserva] = &Reserva{
-			ID:         atual.IDReserva,
-			IDPedido:   atual.IDPedido,
-			Passageiro: atual.Passageiro,
-			Status:     "confirmada",
-			PrecoTotal: somarPreco(atual.Trechos),
-			Trechos:    atual.Trechos,
+	var cancelar []canc
+	for _, p := range e.Pedidos {
+		if p.Fase == "confirmando" {
+			confirmar = append(confirmar, p.IDPedido)
+		} else if p.Fase == "abortando" {
+			abortar = append(abortar, p.IDPedido)
+		} else if p.Fase == "cancelando" {
+			cancelar = append(cancelar, canc{pedido: p.IDPedido, reserva: p.IDReserva})
 		}
 	}
-	atual.Fase = "confirmada"
-	e.Salvar()
+	e.Trava.Unlock()
+	for _, id := range confirmar {
+		fmt.Printf("[%s] retomei %s e vou confirmar de novo\n", e.Empresa, id)
+		e.entregarConfirmacao(id)
+	}
+	for _, id := range abortar {
+		e.AbortarPedido(id)
+	}
+	for _, c := range cancelar {
+		e.tentarCancelar(c.pedido, c.reserva)
+	}
 }
 
 func reconciliarSeguros(e *Estado) {
 	agora := time.Now()
-	type vencido struct {
-		id     string
-		partes []Par
+	type item struct {
+		id   string
+		fase string
+		url  string
 	}
 	e.Trava.Lock()
-	lista := make([]vencido, 0)
+	lista := make([]item, 0)
 	for _, s := range e.Seguros {
-		if (s.Estado == "segurado" || s.Estado == "esperando") && s.Expira.Before(agora) {
-			lista = append(lista, vencido{
-				id:     s.IDPedido,
-				partes: append([]Par(nil), s.Participantes...),
-			})
+		if s.Estado != "esperando" && s.Estado != "segurado" {
+			continue
 		}
+		if !s.Expira.Before(agora) {
+			continue
+		}
+		lista = append(lista, item{id: s.IDPedido, fase: s.Estado, url: s.URLCoord})
 	}
 	e.Trava.Unlock()
 
-	for _, item := range lista {
-		alguemConfirmou := false
-		for _, parte := range item.partes {
-			if parte.Empresa == e.Empresa {
-				continue
-			}
-			if parte.URL == "" {
-				continue
-			}
+	for _, it := range lista {
+		if it.fase == "esperando" {
+			e.TratarDesfazer(it.id)
+			continue
+		}
+		estado := ""
+		if it.url == "" || it.url == e.URLPropria {
+			estado = e.ConsultarPedido(it.id)
+		} else {
 			var resp struct {
 				OK     bool   `json:"ok"`
 				Estado string `json:"estado"`
 			}
-			_, erroRede := Pedir("GET", parte.URL+"/consorcio/pedido?id="+escapar(item.id), nil, e.Timeout, &resp)
+			_, erroRede := Pedir("GET", it.url+"/consorcio/pedido?id="+escapar(it.id), nil, e.Timeout, &resp)
 			if erroRede {
 				continue
 			}
-			if resp.Estado == "confirmado" {
-				alguemConfirmou = true
-				break
-			}
+			estado = resp.Estado
 		}
-		if alguemConfirmou {
-			ok, _ := e.TratarConfirmar(item.id, 0, true)
-			if !ok {
-				e.TratarDesfazer(item.id)
-			}
-		} else {
-			e.TratarDesfazer(item.id)
+		if estado == "confirmado" {
+			e.TratarConfirmar(it.id, 0, true)
+			continue
+		}
+		if estado == "abortado" || estado == "desconhecido" {
+			e.TratarDesfazer(it.id)
 		}
 	}
 }
@@ -140,6 +133,7 @@ func LoopLimpeza(e *Estado) {
 				}
 			}()
 			reconciliarSeguros(e)
+			retomarPendentes(e)
 		}()
 	}
 }

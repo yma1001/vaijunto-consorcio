@@ -99,13 +99,15 @@ docker compose up --build
 
 Cada container tem o seu volume. Nao compartilham arquivo.
 
-No laboratorio, em computadores diferentes: um container por PC, e no PARES / URL_PROPRIA o IP da placa de rede do outro PC. 127.0.0.1 nao atravessa a rede.
+No laboratorio, em computadores diferentes: um processo (ou um container) por PC. Em cada um, `URL_PROPRIA` e o IP da propria placa, e `PARES` leva o IP dos outros dois. A porta publicada tem que ser a mesma que esta na URL. O volume (ou o `ARQUIVO`) fica no disco daquele PC. `127.0.0.1` nao atravessa a rede. O simulador, se rodar de um quarto PC, usa `SIM_EMPRESAS=vaijunto|http://IP1:5001,sudoeste|http://IP2:5002,norteminas|http://IP3:5003`.
+
+Eu nao rodei essa cena em tres computadores. Os testes daqui sao na mesma maquina.
 
 ## Na apresentacao
 
-O texto dos 11 pontos do barema esta em `docs/relatorio.md`. A API e o diagrama de sequencia estao em `docs/api.md`.
+O texto dos 11 pontos do barema esta em `docs/relatorio.md`. A API e o diagrama de sequencia estao em `docs/api.md`. O artigo no formato da SBC ainda e um texto a parte.
 
-Pra derrubar uma empresa no meio: fecha o terminal dela, ou `docker stop sudoeste`. A busca Salvador -> Cachoeira tem que continuar. A viagem ate Montes Claros tem que falhar sem deixar vaga presa. Pra ela voltar: sobe o processo de novo, ou `docker start sudoeste`.
+Pra derrubar uma empresa no meio, na pasta `emulacao`: `docker compose stop sudoeste`. Sem Docker, fecha o terminal dela. A busca Salvador -> Cachoeira tem que continuar. A viagem ate Montes Claros tem que falhar sem baixar vaga. Pra voltar: `docker compose start sudoeste`, ou sobe o processo de novo no mesmo arquivo.
 
 ## Onde esta cada coisa
 

@@ -14,7 +14,11 @@ var entrada = bufio.NewReader(os.Stdin)
 
 func lerLinha(rotulo string) string {
 	fmt.Print(rotulo)
-	s, _ := entrada.ReadString('\n')
+	s, err := entrada.ReadString('\n')
+	if err != nil && strings.TrimSpace(s) == "" {
+		fmt.Println()
+		os.Exit(0)
+	}
 	return strings.TrimSpace(s)
 }
 
@@ -119,25 +123,28 @@ func RodarMotorista() {
 			fmt.Println("essa conta e de passageiro, abre o outro cliente")
 			continue
 		}
-		menuMotorista(base, usuario)
+		menuMotorista(base, usuario, senha)
 	}
 }
 
-func menuMotorista(base, usuario string) {
+func menuMotorista(base, usuario, senha string) {
 	for {
 		fmt.Println()
 		fmt.Println("motorista", usuario)
 		fmt.Println("1 publicar carona")
 		fmt.Println("2 minhas caronas")
 		fmt.Println("3 passageiros de uma carona")
+		fmt.Println("4 cancelar carona")
 		fmt.Println("0 sair")
 		op := lerLinha("> ")
 		if op == "1" {
-			publicar(base, usuario)
+			publicar(base, usuario, senha)
 		} else if op == "2" {
 			minhasCaronas(base, usuario)
 		} else if op == "3" {
 			verPassageiros(base, usuario)
+		} else if op == "4" {
+			cancelarCarona(base, usuario, senha)
 		} else if op == "0" {
 			return
 		} else {
@@ -146,7 +153,7 @@ func menuMotorista(base, usuario string) {
 	}
 }
 
-func publicar(base, usuario string) {
+func publicar(base, usuario, senha string) {
 	fmt.Println("cidades na ordem, separadas por virgula")
 	fmt.Println("exemplo: Salvador, Feira de Santana")
 	texto := lerLinha("cidades: ")
@@ -186,6 +193,7 @@ func publicar(base, usuario string) {
 	var resp Resposta
 	if !falar("POST", base+"/caronas", map[string]any{
 		"usuario": usuario,
+		"senha":   senha,
 		"cidades": cidades,
 		"data":    data,
 		"hora":    hora,
@@ -294,11 +302,11 @@ func RodarPassageiro() {
 			fmt.Println("essa conta e de motorista, abre o outro cliente")
 			continue
 		}
-		menuPassageiro(base, usuario)
+		menuPassageiro(base, usuario, senha)
 	}
 }
 
-func menuPassageiro(base, usuario string) {
+func menuPassageiro(base, usuario, senha string) {
 	var ultima []Itinerario
 	for {
 		fmt.Println()
@@ -312,11 +320,11 @@ func menuPassageiro(base, usuario string) {
 		if op == "1" {
 			ultima = buscar(base)
 		} else if op == "2" {
-			reservarOpcao(base, usuario, ultima)
+			reservarOpcao(base, usuario, senha, ultima)
 		} else if op == "3" {
 			minhasReservas(base, usuario)
 		} else if op == "4" {
-			cancelar(base, usuario)
+			cancelar(base, usuario, senha)
 		} else if op == "0" {
 			return
 		} else {
@@ -352,7 +360,7 @@ func buscar(base string) []Itinerario {
 	return resp.Itinerarios
 }
 
-func reservarOpcao(base, usuario string, ultima []Itinerario) {
+func reservarOpcao(base, usuario, senha string, ultima []Itinerario) {
 	if len(ultima) == 0 {
 		fmt.Println("busca primeiro")
 		return
@@ -366,8 +374,10 @@ func reservarOpcao(base, usuario string, ultima []Itinerario) {
 	// a busca pode ter ficado velha se outra pessoa reservou no meio.
 	var resp Resposta
 	if !falar("POST", base+"/reservar", map[string]any{
-		"usuario": usuario,
-		"trechos": ultima[n-1].Trechos,
+		"usuario":      usuario,
+		"senha":        senha,
+		"id_tentativa": fmt.Sprintf("t-%d", time.Now().UnixNano()),
+		"trechos":      ultima[n-1].Trechos,
 	}, &resp) || !resp.OK {
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
@@ -400,11 +410,11 @@ func minhasReservas(base, usuario string) {
 	}
 }
 
-func cancelar(base, usuario string) {
+func cancelar(base, usuario, senha string) {
 	id := lerLinha("id da reserva: ")
 	var resp Resposta
 	if !falar("POST", base+"/cancelar-reserva", map[string]string{
-		"usuario": usuario, "id_reserva": id,
+		"usuario": usuario, "senha": senha, "id_reserva": id,
 	}, &resp) || !resp.OK {
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
@@ -412,4 +422,18 @@ func cancelar(base, usuario string) {
 		return
 	}
 	fmt.Println("cancelada")
+}
+
+func cancelarCarona(base, usuario, senha string) {
+	id := lerLinha("id da carona: ")
+	var resp Resposta
+	if !falar("POST", base+"/cancelar-carona", map[string]string{
+		"usuario": usuario, "senha": senha, "id_carona": id,
+	}, &resp) || !resp.OK {
+		if resp.Erro != "" {
+			fmt.Println("erro:", resp.Erro)
+		}
+		return
+	}
+	fmt.Println("carona cancelada")
 }

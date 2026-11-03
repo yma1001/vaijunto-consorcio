@@ -13,6 +13,7 @@
 
 services:
   vaijunto:
+    container_name: vaijunto
     build:
       context: ..
       dockerfile: emulacao/Dockerfile
@@ -30,6 +31,7 @@ services:
       - dados_vaijunto:/data
 
   sudoeste:
+    container_name: sudoeste
     build:
       context: ..
       dockerfile: emulacao/Dockerfile
@@ -47,6 +49,7 @@ services:
       - dados_sudoeste:/data
 
   norteminas:
+    container_name: norteminas
     build:
       context: ..
       dockerfile: emulacao/Dockerfile
