@@ -154,6 +154,7 @@ type Estado struct {
 	CortarAckConfirmar bool            // o teste fecha a conexao depois de gravar o confirmar
 	CortarAckSegurar   bool            // o teste fecha a conexao depois de gravar o segurar
 	FalharSeFase       string          // a proxima gravacao desta fase falha uma vez. nao vai pro arquivo
+	FalharSeSeguro     string          // a proxima gravacao com seguro neste estado falha uma vez. nao vai pro arquivo
 	Segredo            string          // senha entre empresas. nao e a senha das contas. nao vai pro arquivo
 	Abandonados        map[string]bool // ids cuja decisao nao entrou no disco. nao vai pro arquivo
 }
@@ -209,11 +210,20 @@ func (e *Estado) ProximoID(prefixo string) string {
 // Escreve .tmp, da Sync e troca o nome. Se morrer no meio, o arquivo antigo fica.
 // Se a troca falhar, o .bak guarda o ultimo arquivo bom.
 // Se FalharSeFase estiver preenchido e algum pedido ja esta nessa fase, esta gravacao falha uma vez.
+// FalharSeSeguro faz o mesmo quando algum seguro ja esta naquele estado.
 func (e *Estado) Salvar() error {
 	if e.FalharSeFase != "" {
 		for _, p := range e.Pedidos {
 			if p.Fase == e.FalharSeFase {
 				e.FalharSeFase = ""
+				return fmt.Errorf("nao consegui gravar")
+			}
+		}
+	}
+	if e.FalharSeSeguro != "" {
+		for _, s := range e.Seguros {
+			if s.Estado == e.FalharSeSeguro {
+				e.FalharSeSeguro = ""
 				return fmt.Errorf("nao consegui gravar")
 			}
 		}

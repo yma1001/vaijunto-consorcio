@@ -6,9 +6,11 @@ package interno
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -703,7 +705,7 @@ func TestDiscoVoltaSemReiniciar(t *testing.T) {
 	}, 8*time.Second, &resp)
 	checar(t, !erro && !resp.OK && status != 202, "a gravacao da decisao falhou")
 	limite := time.Now().Add(4 * time.Second)
-	for time.Now().Before(limite) && tr.fase("vaijunto", "passageiro1") == "segurando" {
+	for time.Now().Before(limite) && tr.fase("vaijunto", "passageiro1") != "abortada" {
 		time.Sleep(200 * time.Millisecond)
 	}
 	checar(t, tr.fase("vaijunto", "passageiro1") == "abortada", "o pedido abortou sem reiniciar")
@@ -739,7 +741,7 @@ func TestAbortoDiscoVolta(t *testing.T) {
 	}, 8*time.Second, &resp)
 	checar(t, !erro && !resp.OK && status != 202, "a resposta do segurar se perdeu e o aborto nao gravou")
 	limite := time.Now().Add(5 * time.Second)
-	for time.Now().Before(limite) && tr.fase("vaijunto", "passageiro1") == "segurando" {
+	for time.Now().Before(limite) && tr.fase("vaijunto", "passageiro1") != "abortada" {
 		time.Sleep(200 * time.Millisecond)
 	}
 	checar(t, tr.fase("vaijunto", "passageiro1") == "abortada", "o aborto entrou quando o disco voltou")
@@ -928,4 +930,143 @@ func TestCargaComQueda(t *testing.T) {
 			checar(t, nome != "", s.empresa+" tem titular na vaga vendida")
 		}
 	}
+}
+
+// Le o estado do seguro no arquivo, nao na memoria.
+func seguroNoDisco(t *testing.T, arquivo, id string) string {
+	t.Helper()
+	bruto, err := os.ReadFile(arquivo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g struct {
+		Seguros map[string]struct {
+			Estado string `json:"estado"`
+		} `json:"seguros"`
+	}
+	if err := json.Unmarshal(bruto, &g); err != nil {
+		t.Fatal(err)
+	}
+	if g.Seguros == nil {
+		return ""
+	}
+	s, ok := g.Seguros[id]
+	if !ok {
+		return ""
+	}
+	return s.Estado
+}
+
+// O sim so vale se o segurado entrou no arquivo. Repetir o id com o disco em esperando nao confirma.
+func TestVotoSemDisco(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	var lista Resposta
+	Pedir("GET", tr.url("norteminas")+"/consorcio/trechos?data=2026-10-30", nil, 3*time.Second, &lista)
+	if len(lista.Trechos) == 0 {
+		t.Fatal("sem trecho")
+	}
+	trecho := lista.Trechos[0]
+	norte := tr.estado("norteminas")
+	corpo := CorpoSegurar{
+		IDPedido:     "pedido-voto-disco",
+		Relogio:      1,
+		EmpresaCoord: "vaijunto",
+		Passageiro:   "passageiro1",
+		Participantes: []Par{
+			{Empresa: "vaijunto", URL: tr.url("vaijunto")},
+			{Empresa: "norteminas", URL: tr.url("norteminas")},
+		},
+		Trechos: []RefTrecho{{IDCarona: trecho.IDCarona, Indice: trecho.Indice}},
+	}
+	norte.Trava.Lock()
+	norte.Seguros["pedido-voto-outro"] = &Seguro{
+		IDPedido:     "pedido-voto-outro",
+		Relogio:      2,
+		EmpresaCoord: "sudoeste",
+		URLCoord:     tr.url("sudoeste"),
+		Passageiro:   "passageiro2",
+		Trechos:      []RefTrecho{{IDCarona: trecho.IDCarona, Indice: trecho.Indice}},
+		Estado:       "esperando",
+		Expira:       time.Now().Add(time.Minute),
+	}
+	if err := norte.Salvar(); err != nil {
+		norte.Trava.Unlock()
+		t.Fatal(err)
+	}
+	norte.FalharSeSeguro = "segurado"
+	norte.Trava.Unlock()
+
+	pedir := func() (int, Resposta) {
+		t.Helper()
+		var resp Resposta
+		status, erro := PedirComo("POST", tr.url("norteminas")+"/consorcio/segurar", "vaijunto", segredoTeste, corpo, 4*time.Second, &resp)
+		checar(t, !erro, "a norteminas respondeu")
+		return status, resp
+	}
+	status, resp := pedir()
+	checar(t, !resp.OK && status == 500, "a primeira preparacao falha com 500")
+	checar(t, strings.Contains(resp.Erro, "gravar"), "o motivo e gravacao, nao falta de vaga")
+	checar(t, seguroNoDisco(t, norte.Arquivo, "pedido-voto-disco") == "esperando", "o disco do pedido ficou esperando")
+	checar(t, seguroNoDisco(t, norte.Arquivo, "pedido-voto-outro") == "esperando", "o outro da janela tambem voltou para esperando")
+
+	norte.FalharSeSeguro = "segurado"
+	status, resp = pedir()
+	checar(t, !resp.OK && status == 500, "repetir o mesmo id nao responde sim")
+	checar(t, resp.Mensagem != "ja estava comigo", "a repeticao nao diz que ja segurou")
+	checar(t, seguroNoDisco(t, norte.Arquivo, "pedido-voto-disco") == "esperando", "o disco continua esperando")
+
+	status, resp = pedir()
+	checar(t, resp.OK && status == 200, "sem a falha de disco, o voto entra")
+	checar(t, seguroNoDisco(t, norte.Arquivo, "pedido-voto-disco") == "segurado", "agora o arquivo diz segurado")
+}
+
+// Duas viagens usam os mesmos trechos em ordem inversa. Uma confirma, a outra nao, e as duas terminam.
+func TestReservasCruzadas(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 30*time.Millisecond, 3*time.Second)
+	defer tr.derrubar()
+	publicar := func(emp string, cidades []string) {
+		t.Helper()
+		resp := tr.estado(emp).PublicarCarona("motorista1", "senha123", cidades, "2026-10-30", "18:00", 1, []int{10})
+		if !resp.OK {
+			t.Fatal(emp, resp.Erro)
+		}
+	}
+	publicar("vaijunto", []string{"CidadeA", "CidadeB"})
+	publicar("sudoeste", []string{"CidadeC", "CidadeD"})
+	publicar("norteminas", []string{"CidadeB", "CidadeC"})
+	publicar("norteminas", []string{"CidadeD", "CidadeA"})
+
+	ida := buscarRota(tr.url("vaijunto"), "CidadeA", "CidadeD")
+	volta := buscarRota(tr.url("sudoeste"), "CidadeC", "CidadeB")
+	checar(t, len(ida.Itinerarios) >= 1, "achou o caminho de A ate D")
+	checar(t, len(volta.Itinerarios) >= 1, "achou o caminho de C ate B")
+	if len(ida.Itinerarios) == 0 || len(volta.Itinerarios) == 0 {
+		return
+	}
+
+	ch := make(chan bool, 2)
+	go func() {
+		r := reservar(tr.url("vaijunto"), "passageiro1", ida.Itinerarios[0].Trechos)
+		ch <- r.OK
+	}()
+	go func() {
+		r := reservar(tr.url("sudoeste"), "passageiro2", volta.Itinerarios[0].Trechos)
+		ch <- r.OK
+	}()
+	confirmou := 0
+	recebidos := 0
+	limite := time.After(15 * time.Second)
+	for recebidos < 2 {
+		select {
+		case ok := <-ch:
+			recebidos = recebidos + 1
+			if ok {
+				confirmou = confirmou + 1
+			}
+		case <-limite:
+			t.Fatal("as duas reservas nao terminaram")
+		}
+	}
+	checar(t, confirmou == 1, "uma reserva cruzada confirmou e a outra nao")
 }

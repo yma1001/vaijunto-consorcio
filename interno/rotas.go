@@ -198,7 +198,7 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			responder(w, 200, Resposta{OK: true, Mensagem: motivo})
 			return
 		}
-		responder(w, 409, Resposta{Erro: motivo})
+		responder(w, codigoHTTP(Resposta{Erro: motivo}), Resposta{Erro: motivo})
 		return
 	}
 	if r.Method == http.MethodPost && caminho == "/consorcio/confirmar" {
@@ -231,7 +231,7 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			responder(w, 200, Resposta{OK: true, Mensagem: motivo})
 			return
 		}
-		responder(w, 409, Resposta{Erro: motivo})
+		responder(w, codigoHTTP(Resposta{Erro: motivo}), Resposta{Erro: motivo})
 		return
 	}
 	if r.Method == http.MethodPost && (caminho == "/consorcio/desfazer" || caminho == "/consorcio/liberar") {
@@ -254,7 +254,7 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			responder(w, 200, Resposta{OK: true, Mensagem: motivo})
 			return
 		}
-		responder(w, 400, Resposta{Erro: motivo})
+		responder(w, codigoHTTP(Resposta{Erro: motivo}), Resposta{Erro: motivo})
 		return
 	}
 
@@ -319,8 +319,8 @@ func responder(w http.ResponseWriter, status int, v any) {
 }
 
 // 200 se deu certo. 401 se o texto fala senha. 404 se nao achei.
-// 409 se fala vaga, segurar, confirmar ou expirou. O resto e 400.
-// Se a resposta ja trouxe um codigo, esse ganha.
+// 500 se nao conseguiu gravar. 409 se fala vaga, segurar, confirmar ou expirou.
+// O resto e 400. Se a resposta ja trouxe um codigo, esse ganha. O 202 entra por ai.
 func codigoHTTP(resp Resposta) int {
 	if resp.Codigo != 0 {
 		return resp.Codigo
@@ -334,6 +334,9 @@ func codigoHTTP(resp Resposta) int {
 	}
 	if strings.Contains(erro, "nao existe") || strings.Contains(erro, "nao achei") {
 		return 404
+	}
+	if strings.Contains(erro, "gravar") {
+		return 500
 	}
 	if strings.Contains(erro, "vaga") || strings.Contains(erro, "segurar") || strings.Contains(erro, "confirmar") || strings.Contains(erro, "expirou") {
 		return 409

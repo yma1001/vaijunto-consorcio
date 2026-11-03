@@ -6,7 +6,7 @@ Tem dois tipos de conversa.
 2. As empresas falam entre si. O aplicativo nao chama essas rotas.
 
 Tudo e JSON UTF-8. Se o JSON vier quebrado, a resposta e 400 e nada e gravado.
-Codigo HTTP: 200 deu certo, 400 pedido torto, 401 senha errada, 404 nao achei, 409 sem vaga ou conflito.
+Codigo HTTP: 200 deu certo, 202 confirmacao ja decidida e ainda sem o fim, 400 pedido torto, 401 senha errada, 404 nao achei, 409 sem vaga ou conflito, 500 nao conseguiu gravar. 409 nao e erro de disco.
 
 Nao tem token de sessao. A senha da conta vai no corpo do POST, ou no cabecalho Authorization (HTTP Basic) nas listagens. Ela nao vai na URL. Entre as empresas, segurar, confirmar e desfazer pedem outro Basic: o usuario e o nome da empresa e a senha e a variavel SEGREDO. Sem essa variavel o servidor nao sobe. SEGREDO nao e a senha das contas (senha123). So a coordenadora gravada naquele pedido passa. O mesmo SEGREDO nas tres maquinas nao prova de qual maquina saiu o pacote: quem souber o valor pode colocar o nome de outra empresa no usuario.
 
@@ -98,14 +98,14 @@ Ainda nao baixa a vaga. So marca segurado, se ganhar na janela do relogio.
   "trechos": [{"id_carona": "carona-norteminas-1", "indice": 0}]
 }
 ```
-200 se segurou. 409 se nao tem vaga. O cabecalho Basic tem que ser da empresa_coord, com SEGREDO. A senha da conta nao serve.
+200 se segurou. 409 se nao tem vaga. 500 se a gravacao do voto falhou: nesse caso o arquivo nao fica segurado, e repetir o mesmo id nao responde 200. O cabecalho Basic tem que ser da empresa_coord, com SEGREDO. A senha da conta nao serve.
 
 ### POST /consorcio/confirmar
 Cabecalho Basic da coordenadora. Corpo:
 ```json
 {"id_pedido": "pedido-vaijunto-3", "relogio": 1, "empresa": "vaijunto"}
 ```
-Agora baixa vagas_livres. Se esse id ja estava confirmado, responde 200 e nao baixa de novo. Outra empresa, mesmo com SEGREDO, recebe 403. A senha da conta recebe 401.
+Agora baixa vagas_livres. Se esse id ja estava confirmado, responde 200 e nao baixa de novo. Se o disco recusar, 500 e a vaga na memoria volta ao que era. Outra empresa, mesmo com SEGREDO, recebe 403. A senha da conta recebe 401.
 
 ### POST /consorcio/desfazer
 Cabecalho Basic da coordenadora. Corpo:

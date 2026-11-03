@@ -220,18 +220,40 @@ func (e *Estado) TratarSegurar(c CorpoSegurar) (bool, string) {
 
 	e.Trava.Lock()
 	defer e.Trava.Unlock()
+	// guardo quem estava esperando. se o disco recusar a decisao,
+	// devolvo o lote inteiro. senao a repeticao responde sim com o arquivo ainda em esperando.
+	antes := map[string]string{}
+	for id, s := range e.Seguros {
+		if s.Estado == "esperando" {
+			antes[id] = "esperando"
+		}
+	}
 	e.decidirQuemFicaComAVaga()
 	seguro := e.Seguros[c.IDPedido]
-	if seguro == nil || seguro.Estado != "segurado" {
-		if seguro != nil && seguro.Estado == "negado" {
-			delete(e.Seguros, c.IDPedido)
-			e.Salvar()
-		}
-		return false, "sem vaga"
+	ganhou := seguro != nil && seguro.Estado == "segurado"
+	var apagado *Seguro
+	if seguro != nil && seguro.Estado == "negado" {
+		apagado = seguro
+		delete(e.Seguros, c.IDPedido)
 	}
-	seguro.Expira = time.Now().Add(e.Expira)
+	if ganhou {
+		seguro.Expira = time.Now().Add(e.Expira)
+	}
 	if err := e.Salvar(); err != nil {
+		if apagado != nil {
+			e.Seguros[apagado.IDPedido] = apagado
+		}
+		for id, estado := range antes {
+			s := e.Seguros[id]
+			if s == nil {
+				continue
+			}
+			s.Estado = estado
+		}
 		return false, "nao consegui gravar"
+	}
+	if !ganhou {
+		return false, "sem vaga"
 	}
 	return true, "ok"
 }
