@@ -152,6 +152,9 @@ type Estado struct {
 	Contador           int
 	Ligado             bool
 	CortarAckConfirmar bool
+	FalharSeFase       string
+	Segredo            string
+	Abandonados        map[string]bool
 }
 
 func NovoEstado(empresa, regiao, arquivo, urlPropria string, pares []Par, expira, janela, timeout time.Duration) *Estado {
@@ -159,21 +162,23 @@ func NovoEstado(empresa, regiao, arquivo, urlPropria string, pares []Par, expira
 		pares = []Par{}
 	}
 	return &Estado{
-		Empresa:    empresa,
-		Regiao:     regiao,
-		Arquivo:    arquivo,
-		URLPropria: urlPropria,
-		Pares:      pares,
-		Expira:     expira,
-		Janela:     janela,
-		Timeout:    timeout,
-		Usuarios:   map[string]Usuario{},
-		Caronas:    map[string]*Carona{},
-		Reservas:   map[string]*Reserva{},
-		Seguros:    map[string]*Seguro{},
-		Pedidos:    map[string]*Pedido{},
-		Contador:   1,
-		Ligado:     true,
+		Empresa:     empresa,
+		Regiao:      regiao,
+		Arquivo:     arquivo,
+		URLPropria:  urlPropria,
+		Pares:       pares,
+		Expira:      expira,
+		Janela:      janela,
+		Timeout:     timeout,
+		Usuarios:    map[string]Usuario{},
+		Caronas:     map[string]*Carona{},
+		Reservas:    map[string]*Reserva{},
+		Seguros:     map[string]*Seguro{},
+		Pedidos:     map[string]*Pedido{},
+		Contador:    1,
+		Ligado:      true,
+		Segredo:     "senha123",
+		Abandonados: map[string]bool{},
 	}
 }
 
@@ -200,6 +205,14 @@ func (e *Estado) ProximoID(prefixo string) string {
 // Escreve .tmp e troca o nome. Se morrer no meio do write, o arquivo antigo fica.
 // Se a troca falhar, o arquivo anterior continua no lugar.
 func (e *Estado) Salvar() error {
+	if e.FalharSeFase != "" {
+		for _, p := range e.Pedidos {
+			if p.Fase == e.FalharSeFase {
+				e.FalharSeFase = ""
+				return fmt.Errorf("nao consegui gravar")
+			}
+		}
+	}
 	g := gravacao{
 		Usuarios: e.Usuarios,
 		Caronas:  e.Caronas,

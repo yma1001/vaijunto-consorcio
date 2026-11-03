@@ -15,7 +15,7 @@ import (
 // A coordenacao (relogio, segurar, desfazer) esta neste codigo.
 
 func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("[%s] %s %s\n", e.Empresa, r.Method, r.URL.RequestURI())
+	fmt.Printf("[%s] %s %s\n", e.Empresa, r.Method, r.URL.Path)
 	caminho := r.URL.Path
 
 	if r.Method == http.MethodGet && (caminho == "/" || caminho == "/consorcio/saude") {
@@ -45,12 +45,22 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && caminho == "/minhas-caronas" {
-		resp := e.ListarMinhasCaronas(r.URL.Query().Get("usuario"), r.URL.Query().Get("senha"))
+		usuario, senha, ok := r.BasicAuth()
+		if !ok {
+			responder(w, 401, Resposta{Erro: "usuario ou senha invalido"})
+			return
+		}
+		resp := e.ListarMinhasCaronas(usuario, senha)
 		responder(w, codigoHTTP(resp), resp)
 		return
 	}
 	if r.Method == http.MethodGet && caminho == "/passageiros" {
-		resp, lista := e.ListarPassageiros(r.URL.Query().Get("usuario"), r.URL.Query().Get("senha"), r.URL.Query().Get("id_carona"))
+		usuario, senha, ok := r.BasicAuth()
+		if !ok {
+			responder(w, 401, Resposta{Erro: "usuario ou senha invalido"})
+			return
+		}
+		resp, lista := e.ListarPassageiros(usuario, senha, r.URL.Query().Get("id_carona"))
 		if !resp.OK {
 			responder(w, codigoHTTP(resp), resp)
 			return
@@ -59,7 +69,12 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && caminho == "/minhas-reservas" {
-		resp := e.ListarMinhasReservas(r.URL.Query().Get("usuario"), r.URL.Query().Get("senha"))
+		usuario, senha, ok := r.BasicAuth()
+		if !ok {
+			responder(w, 401, Resposta{Erro: "usuario ou senha invalido"})
+			return
+		}
+		resp := e.ListarMinhasReservas(usuario, senha)
 		responder(w, codigoHTTP(resp), resp)
 		return
 	}
@@ -153,9 +168,18 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost && caminho == "/consorcio/segurar" {
+		quem, cod := e.quemAutenticou(r)
+		if cod != 200 {
+			responder(w, cod, Resposta{Erro: "usuario ou senha invalido"})
+			return
+		}
 		var corpo CorpoSegurar
 		if err := lerJSON(w, r, &corpo); err != nil {
 			responder(w, 400, Resposta{Erro: "json invalido"})
+			return
+		}
+		if quem != corpo.EmpresaCoord {
+			responder(w, 403, Resposta{Erro: "so o coordenador deste pedido mexe nele"})
 			return
 		}
 		ok, motivo := e.TratarSegurar(corpo)
@@ -167,12 +191,21 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost && caminho == "/consorcio/confirmar" {
+		quem, cod := e.quemAutenticou(r)
+		if cod != 200 {
+			responder(w, cod, Resposta{Erro: "usuario ou senha invalido"})
+			return
+		}
 		var corpo corpoID
 		if err := lerJSON(w, r, &corpo); err != nil {
 			responder(w, 400, Resposta{Erro: "json invalido"})
 			return
 		}
-		ok, motivo := e.TratarConfirmar(corpo.IDPedido, corpo.Empresa, corpo.Relogio)
+		if !e.podeMexer(quem, corpo.IDPedido) {
+			responder(w, 403, Resposta{Erro: "so o coordenador deste pedido mexe nele"})
+			return
+		}
+		ok, motivo := e.TratarConfirmar(corpo.IDPedido, quem, corpo.Relogio)
 		if ok && e.CortarAckConfirmar {
 			hj, pode := w.(http.Hijacker)
 			if pode {
@@ -191,12 +224,21 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost && (caminho == "/consorcio/desfazer" || caminho == "/consorcio/liberar") {
+		quem, cod := e.quemAutenticou(r)
+		if cod != 200 {
+			responder(w, cod, Resposta{Erro: "usuario ou senha invalido"})
+			return
+		}
 		var corpo corpoID
 		if err := lerJSON(w, r, &corpo); err != nil {
 			responder(w, 400, Resposta{Erro: "json invalido"})
 			return
 		}
-		ok, motivo := e.TratarDesfazer(corpo.IDPedido, corpo.Empresa)
+		if !e.podeMexer(quem, corpo.IDPedido) {
+			responder(w, 403, Resposta{Erro: "so o coordenador deste pedido mexe nele"})
+			return
+		}
+		ok, motivo := e.TratarDesfazer(corpo.IDPedido, quem)
 		if ok {
 			responder(w, 200, Resposta{OK: true, Mensagem: motivo})
 			return
@@ -206,6 +248,30 @@ func (e *Estado) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responder(w, 404, Resposta{Erro: "rota nao existe"})
+}
+
+func (e *Estado) quemAutenticou(r *http.Request) (string, int) {
+	user, senha, ok := r.BasicAuth()
+	segredo := e.Segredo
+	if segredo == "" {
+		segredo = "senha123"
+	}
+	if !ok || senha != segredo || e.urlDa(user) == "" {
+		return "", 401
+	}
+	return user, 200
+}
+
+// podeMexer: se o pedido ja tem coordenadora gravada, so ela mexe.
+// chamada interna de recuperacao nao passa por aqui.
+func (e *Estado) podeMexer(quem, idPedido string) bool {
+	e.Trava.Lock()
+	defer e.Trava.Unlock()
+	s := e.Seguros[idPedido]
+	if s == nil || s.EmpresaCoord == "" {
+		return true
+	}
+	return quem == s.EmpresaCoord
 }
 
 func (e *Estado) rotaSaude(w http.ResponseWriter) {
@@ -351,6 +417,7 @@ func Rodar() {
 		time.Duration(janelaMs)*time.Millisecond,
 		time.Duration(timeoutSeg)*time.Second,
 	)
+	e.Segredo = getenv("SEGREDO", "senha123")
 	err = e.CarregarOuSemear()
 	if err != nil {
 		fmt.Println("nao consegui abrir o arquivo:", err)

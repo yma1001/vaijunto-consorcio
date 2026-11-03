@@ -8,7 +8,7 @@ Tem dois tipos de conversa.
 Tudo e JSON UTF-8. Se o JSON vier quebrado, a resposta e 400 e nada e gravado.
 Codigo HTTP: 200 deu certo, 400 pedido torto, 401 senha errada, 404 nao achei, 409 sem vaga ou conflito.
 
-Nao tem token. O cliente manda o nome do usuario. Prototipo, igual a senha em texto.
+Nao tem token de sessao. A senha da conta vai no corpo do POST, ou no cabecalho Authorization (HTTP Basic) nas listagens. Ela nao vai na URL. Entre as empresas, segurar, confirmar e desfazer tambem pedem Basic: o usuario e o nome da empresa e a senha e a variavel SEGREDO (padrao senha123). So a coordenadora gravada naquele pedido passa.
 
 ## Aplicativo -> a propria empresa
 
@@ -53,13 +53,15 @@ Cada trecho diz a empresa e a regiao.
 ```
 O normal e mandar os trechos que a busca devolveu. O servidor troca preco e cidades pelos dados da empresa dona. Sem a senha da conta, recusa. O mesmo `id_tentativa` nao compra outro assento.
 
-### GET /minhas-reservas?usuario=passageiro1
+### GET /minhas-reservas
+Cabecalho `Authorization: Basic` com o usuario e a senha. Sem isso, 401.
 
 ### POST /cancelar-reserva
 ```json
 {"usuario": "passageiro1", "senha": "senha123", "id_reserva": "reserva-vaijunto-4"}
 ```
 Manda desfazer em todas as empresas do itinerario. Chamar de novo nao devolve a vaga outra vez.
+Se uma empresa cair no meio, a resposta pode ser 400 e a listagem ainda mostrar a viagem confirmada. O pedido ficou em `cancelando`. Manda o mesmo POST outra vez. Quando todas responderem, a listagem passa a cancelada.
 
 ## Empresa -> empresa
 
@@ -96,19 +98,21 @@ Ainda nao baixa a vaga. So marca segurado, se ganhar na janela do relogio.
   "trechos": [{"id_carona": "carona-norteminas-1", "indice": 0}]
 }
 ```
-200 se segurou. 409 se nao tem vaga.
+200 se segurou. 409 se nao tem vaga. O cabecalho Basic tem que ser da empresa_coord.
 
 ### POST /consorcio/confirmar
+Cabecalho Basic da coordenadora. Corpo:
 ```json
-{"id_pedido": "pedido-vaijunto-3", "relogio": 1}
+{"id_pedido": "pedido-vaijunto-3", "relogio": 1, "empresa": "vaijunto"}
 ```
-Agora baixa vagas_livres. Se esse id ja estava confirmado, responde 200 e nao baixa de novo.
+Agora baixa vagas_livres. Se esse id ja estava confirmado, responde 200 e nao baixa de novo. Outra empresa, mesmo com a senha do consorcio, recebe 403.
 
 ### POST /consorcio/desfazer
+Cabecalho Basic da coordenadora. Corpo:
 ```json
-{"id_pedido": "pedido-vaijunto-3"}
+{"id_pedido": "pedido-vaijunto-3", "empresa": "vaijunto"}
 ```
-Se so estava segurado, solta. Se ja tinha confirmado, devolve a vaga. A segunda chamada nao devolve de novo.
+Se so estava segurado, solta. Se ja tinha confirmado, devolve a vaga. A segunda chamada nao devolve de novo. Sem o cabecalho, 401. Empresa que nao e a coordenadora, 403.
 
 ### POST /consorcio/liberar
 A mesma coisa que desfazer. Deixei as duas rotas porque no texto a gente fala "liberar a trava" e "desfazer a confirmacao", mas no codigo e uma funcao so.

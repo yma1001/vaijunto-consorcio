@@ -71,6 +71,26 @@ func retomarPendentes(e *Estado) {
 	}
 }
 
+// Pedido que terminou de segurar e nao gravou a decisao.
+// Nao olho todo segurando: tem reserva saudavel no meio da rede.
+func retomarAbandonados(e *Estado) {
+	e.Trava.Lock()
+	ids := make([]string, 0)
+	for id := range e.Abandonados {
+		p := e.Pedidos[id]
+		if p == nil || p.Fase != "segurando" {
+			delete(e.Abandonados, id)
+			continue
+		}
+		ids = append(ids, id)
+	}
+	e.Trava.Unlock()
+	for _, id := range ids {
+		fmt.Printf("[%s] pedido %s ficou sem decisao gravada, vou abortar\n", e.Empresa, id)
+		e.AbortarPedido(id)
+	}
+}
+
 func reconciliarSeguros(e *Estado) {
 	agora := time.Now()
 	type item struct {
@@ -134,6 +154,7 @@ func LoopLimpeza(e *Estado) {
 			}()
 			reconciliarSeguros(e)
 			retomarPendentes(e)
+			retomarAbandonados(e)
 		}()
 	}
 }

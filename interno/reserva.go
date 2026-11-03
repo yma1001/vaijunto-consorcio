@@ -16,10 +16,11 @@ import (
 // Fase 2, CONFIRMAR. So mando depois que todas seguraram.
 // Gravo "confirmando" antes de mandar. Se a resposta se perder,
 // repito o confirmar. Quem ja baixou a vaga responde de novo sem baixar outra.
-// So desfazo se a outra empresa responder que nao confirmou.
 // Timeout nao e conflito: fico em "confirmando" e tento de novo.
 // Depois que gravei "confirmando", nao aborto mais. So repito o confirmar.
 // Voto ja segurado nao olha o prazo. O prazo so vale enquanto esta esperando.
+// Se eu nao conseguir gravar a decisao, marco o pedido e aborto quando o disco voltar.
+// Nao mando desfazer antes de gravar esse aborto.
 //
 // A ordem alfabetica evita deadlock: todo mundo pede norteminas,
 // depois sudoeste, depois vaijunto. Ninguem segura A esperando B
@@ -367,7 +368,7 @@ func (e *Estado) segurarNa(empresa string, c CorpoSegurar) (bool, bool, string) 
 		return false, false, "nao conheco a empresa " + empresa
 	}
 	var resp Resposta
-	_, erroRede := Pedir("POST", url+"/consorcio/segurar", c, e.Timeout, &resp)
+	_, erroRede := PedirComo("POST", url+"/consorcio/segurar", e.Empresa, e.Segredo, c, e.Timeout, &resp)
 	if erroRede {
 		return false, true, "sem resposta de " + empresa
 	}
@@ -390,7 +391,7 @@ func (e *Estado) confirmarNa(empresa, idPedido string, relogio int) (bool, bool,
 		return false, false, "nao conheco a empresa " + empresa
 	}
 	var resp Resposta
-	_, erroRede := Pedir("POST", url+"/consorcio/confirmar", corpoID{IDPedido: idPedido, Relogio: relogio, Empresa: e.Empresa}, e.Timeout, &resp)
+	_, erroRede := PedirComo("POST", url+"/consorcio/confirmar", e.Empresa, e.Segredo, corpoID{IDPedido: idPedido, Relogio: relogio, Empresa: e.Empresa}, e.Timeout, &resp)
 	if erroRede {
 		return false, true, "sem resposta de " + empresa
 	}
@@ -413,7 +414,7 @@ func (e *Estado) desfazerNa(empresa, idPedido string) (bool, bool, string) {
 		return false, false, "nao conheco a empresa " + empresa
 	}
 	var resp Resposta
-	_, erroRede := Pedir("POST", url+"/consorcio/desfazer", corpoID{IDPedido: idPedido, Empresa: e.Empresa}, e.Timeout, &resp)
+	_, erroRede := PedirComo("POST", url+"/consorcio/desfazer", e.Empresa, e.Segredo, corpoID{IDPedido: idPedido, Empresa: e.Empresa}, e.Timeout, &resp)
 	if erroRede {
 		return false, true, "sem resposta de " + empresa
 	}
@@ -661,8 +662,7 @@ func (e *Estado) Reservar(usuario, senha, idTentativa string, trechos []TrechoVi
 	}
 
 	e.Trava.Lock()
-	if _, _, _, achou := e.acharTentativa(usuario, idTentativa); achou {
-		fase, idPedidoExistente, idReservaExistente, _ := e.acharTentativa(usuario, idTentativa)
+	if fase, idPedidoExistente, idReservaExistente, achou := e.acharTentativa(usuario, idTentativa); achou {
 		e.Trava.Unlock()
 		return e.responderTentativa(fase, idPedidoExistente, idReservaExistente)
 	}
@@ -726,10 +726,19 @@ func (e *Estado) Reservar(usuario, senha, idTentativa string, trechos []TrechoVi
 		return Resposta{Erro: "pedido sumiu"}
 	}
 	err := e.gravarFase(idPedido, "confirmando")
-	e.Trava.Unlock()
 	if err != nil {
+		// a preparacao ja terminou, mas a decisao nao entrou no disco.
+		// marco so este pedido. o laco aborta quando a escrita voltar.
+		// um segurando que ainda esta na rede nao entra neste mapa.
+		if e.Abandonados == nil {
+			e.Abandonados = map[string]bool{}
+		}
+		e.Abandonados[idPedido] = true
+		e.Trava.Unlock()
+		e.AbortarPedido(idPedido)
 		return Resposta{Erro: "nao consegui gravar a confirmacao"}
 	}
+	e.Trava.Unlock()
 
 	okConf, motivo := e.entregarConfirmacao(idPedido)
 	if !okConf {

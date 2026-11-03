@@ -44,9 +44,23 @@ func ArrumarData(texto string) string {
 }
 
 func falar(metodo, endereco string, corpo any, destino any) bool {
-	_, erroRede := Pedir(metodo, endereco, corpo, 8*time.Second, destino)
+	return falarComo(metodo, endereco, "", "", corpo, destino)
+}
+
+func falarComo(metodo, endereco, usuario, senha string, corpo any, destino any) bool {
+	var status int
+	var erroRede bool
+	if usuario == "" {
+		status, erroRede = Pedir(metodo, endereco, corpo, 8*time.Second, destino)
+	} else {
+		status, erroRede = PedirComo(metodo, endereco, usuario, senha, corpo, 8*time.Second, destino)
+	}
 	if erroRede || destino == nil {
 		fmt.Println("nao consegui falar com o servidor em " + endereco)
+		return false
+	}
+	if status == 401 {
+		fmt.Println("usuario ou senha invalido")
 		return false
 	}
 	return true
@@ -212,7 +226,7 @@ func publicar(base, usuario, senha string) {
 
 func minhasCaronas(base, usuario, senha string) {
 	var resp Resposta
-	if !falar("GET", urlComQuery(base, "/minhas-caronas", map[string]string{"usuario": usuario, "senha": senha}), nil, &resp) || !resp.OK {
+	if !falarComo("GET", urlComQuery(base, "/minhas-caronas", map[string]string{"usuario": usuario}), usuario, senha, nil, &resp) || !resp.OK {
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
 		}
@@ -239,9 +253,9 @@ func verPassageiros(base, usuario, senha string) {
 		Erro    string           `json:"erro"`
 		Trechos []trechoComGente `json:"trechos"`
 	}
-	if !falar("GET", urlComQuery(base, "/passageiros", map[string]string{
-		"usuario": usuario, "senha": senha, "id_carona": id,
-	}), nil, &resp) || !resp.OK {
+	if !falarComo("GET", urlComQuery(base, "/passageiros", map[string]string{
+		"usuario": usuario, "id_carona": id,
+	}), usuario, senha, nil, &resp) || !resp.OK {
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
 		}
@@ -408,7 +422,7 @@ func reservarOpcao(base, usuario, senha string, chave *string, ultima []Itinerar
 
 func minhasReservas(base, usuario, senha string) {
 	var resp Resposta
-	if !falar("GET", urlComQuery(base, "/minhas-reservas", map[string]string{"usuario": usuario, "senha": senha}), nil, &resp) || !resp.OK {
+	if !falarComo("GET", urlComQuery(base, "/minhas-reservas", map[string]string{"usuario": usuario}), usuario, senha, nil, &resp) || !resp.OK {
 		if resp.Erro != "" {
 			fmt.Println("erro:", resp.Erro)
 		}

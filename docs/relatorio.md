@@ -131,10 +131,13 @@ Automatizado: `go test ./interno -count=1`
 | `TestPrazoNaoAbortaConfirmacao` | janela maior que o prazo: a confirmacao nao vira aborto |
 | `TestGravacaoFalha` | se o disco falha, a fase na memoria volta e o arquivo antigo fica |
 | `TestCoordenadorMudo` | voto prometido fica preso se o coordenador cai; outra empresa ainda reserva |
+| `TestDiscoVoltaSemReiniciar` | falhou ao gravar a decisao: o pedido aborta quando o disco volta, sem reiniciar |
+| `TestDesfazerSoCoordenador` | sem credencial 401, outra empresa 403, a coordenadora repete o confirmar |
+| `TestCargaComQueda` | 18 passageiros, a sudoeste cai na preparacao e volta: tres JSON sem pendencia e saldo inicial |
 
 Carga: `go run ./cmd/simulador 12`, com os tres servidores ja nas portas 5001–5003. O usuario muda a cada execucao. `SIM_EMPRESAS` troca o endereco, no formato `nome|url,nome|url`. A carona de Montes Claros nasce com 1 vaga. O resultado esperado e 1 confirmacao.
 
-Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 9,1s) e `go test -race -count=1 ./...` (ok, 11,1s). Ainda falta repetir a queda no laboratorio, em tres computadores, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
+Estes testes rodaram nesta maquina, com os tres processos em portas locais: `go build ./...`, `go vet ./...`, `go test ./interno -count=1` (ok, 10,5s) e `go test -race -count=1 ./...` (ok, 11,8s). Ainda falta repetir a queda no laboratorio, em tres computadores, e escrever o artigo no formato da SBC. Isso nao esta neste repositorio.
 
 ## 11. Emulacao
 

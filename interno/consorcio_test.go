@@ -6,6 +6,7 @@ package interno
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -289,7 +290,7 @@ func TestSeguroExpira(t *testing.T) {
 		Trechos: []RefTrecho{{IDCarona: trecho.IDCarona, Indice: trecho.Indice}},
 	}
 	var resp Resposta
-	_, erro = Pedir("POST", tr.url("norteminas")+"/consorcio/segurar", corpo, 4*time.Second, &resp)
+	_, erro = PedirComo("POST", tr.url("norteminas")+"/consorcio/segurar", "vaijunto", "senha123", corpo, 4*time.Second, &resp)
 	checar(t, !erro && resp.OK, "segurou")
 	checar(t, vaga(t, tr.url("norteminas"), "Vitória da Conquista", "Montes Claros") == 0, "enquanto segurado a vaga some da busca")
 	time.Sleep(2200 * time.Millisecond)
@@ -607,7 +608,7 @@ func TestGravacaoFalha(t *testing.T) {
 		Trechos:      []RefTrecho{{IDCarona: cachoeira.IDCarona, Indice: cachoeira.Indice}},
 	}
 	var segurou Resposta
-	_, erroRede := Pedir("POST", tr.url("vaijunto")+"/consorcio/segurar", corpo, 4*time.Second, &segurou)
+	_, erroRede := PedirComo("POST", tr.url("vaijunto")+"/consorcio/segurar", "vaijunto", "senha123", corpo, 4*time.Second, &segurou)
 	checar(t, !erroRede && segurou.OK, "segurou para testar o desfazer")
 	e.Arquivo = filepath.Join(original, "nao.json")
 	ok, _ := e.TratarDesfazer("pedido-grava", "vaijunto")
@@ -638,7 +639,7 @@ func TestCoordenadorMudo(t *testing.T) {
 		Trechos:      []RefTrecho{{IDCarona: trecho.IDCarona, Indice: trecho.Indice}},
 	}
 	var segurou Resposta
-	_, erro := Pedir("POST", tr.url("norteminas")+"/consorcio/segurar", corpo, 4*time.Second, &segurou)
+	_, erro := PedirComo("POST", tr.url("norteminas")+"/consorcio/segurar", "vaijunto", "senha123", corpo, 4*time.Second, &segurou)
 	checar(t, !erro && segurou.OK, "a norteminas segurou")
 	tr.derrubarEmpresa("vaijunto")
 	time.Sleep(2 * time.Second)
@@ -650,4 +651,158 @@ func TestCoordenadorMudo(t *testing.T) {
 	resp := reservar(tr.url("sudoeste"), "passageiro2", busca.Itinerarios[0].Trechos)
 	checar(t, resp.OK, "uma viagem que nao depende da vaijunto ainda fecha")
 	checar(t, vagaBruta(tr, "sudoeste", "Feira de Santana", "Vitória da Conquista") == 2, "a sudoeste baixou a vaga dela")
+}
+
+func TestDiscoVoltaSemReiniciar(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	var lista Resposta
+	Pedir("GET", tr.url("norteminas")+"/consorcio/trechos?data=2026-10-30", nil, 3*time.Second, &lista)
+	if len(lista.Trechos) == 0 {
+		t.Fatal("sem trecho")
+	}
+	tr.estado("vaijunto").FalharSeFase = "confirmando"
+	var resp Resposta
+	status, erro := Pedir("POST", tr.url("vaijunto")+"/reservar", map[string]any{
+		"usuario":      "passageiro1",
+		"senha":        "senha123",
+		"id_tentativa": "disco-1",
+		"trechos":      []TrechoViagem{lista.Trechos[0]},
+	}, 8*time.Second, &resp)
+	checar(t, !erro && !resp.OK && status != 202, "a gravacao da decisao falhou")
+	limite := time.Now().Add(4 * time.Second)
+	for time.Now().Before(limite) && tr.fase("vaijunto", "passageiro1") == "segurando" {
+		time.Sleep(200 * time.Millisecond)
+	}
+	checar(t, tr.fase("vaijunto", "passageiro1") == "abortada", "o pedido abortou sem reiniciar")
+	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 1, "a vaga voltou")
+	var deNovo Resposta
+	status, _ = Pedir("POST", tr.url("vaijunto")+"/reservar", map[string]any{
+		"usuario":      "passageiro1",
+		"senha":        "senha123",
+		"id_tentativa": "disco-1",
+		"trechos":      []TrechoViagem{lista.Trechos[0]},
+	}, 5*time.Second, &deNovo)
+	checar(t, !deNovo.OK && status != 202, "a mesma chave nao fica pendente")
+	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 1, "nao vendeu de novo")
+}
+
+func TestDesfazerSoCoordenador(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 20*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	var lista Resposta
+	Pedir("GET", tr.url("norteminas")+"/consorcio/trechos?data=2026-10-30", nil, 3*time.Second, &lista)
+	if len(lista.Trechos) == 0 {
+		t.Fatal("sem trecho")
+	}
+	resp := reservar(tr.url("vaijunto"), "passageiro1", []TrechoViagem{lista.Trechos[0]})
+	checar(t, resp.OK && resp.Reserva != nil, "reservou a ultima vaga")
+	if resp.Reserva == nil {
+		return
+	}
+	id := resp.Reserva.IDPedido
+	corpo := map[string]string{"id_pedido": id, "empresa": "sudoeste"}
+	var ruim Resposta
+	status, _ := Pedir("POST", tr.url("norteminas")+"/consorcio/desfazer", corpo, 3*time.Second, &ruim)
+	checar(t, status == 401, "sem credencial nao desfaz")
+	status, _ = PedirComo("POST", tr.url("norteminas")+"/consorcio/desfazer", "sudoeste", "senha123", corpo, 3*time.Second, &ruim)
+	checar(t, status == 403, "outra empresa nao desfaz")
+	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 0, "a vaga continua vendida")
+	var ok Resposta
+	status, _ = PedirComo("POST", tr.url("norteminas")+"/consorcio/confirmar", "vaijunto", "senha123", map[string]any{
+		"id_pedido": id, "empresa": "vaijunto", "relogio": 1,
+	}, 3*time.Second, &ok)
+	checar(t, status == 200 && ok.OK, "a coordenadora repete o confirmar")
+	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == 0, "repetir nao devolve a vaga")
+}
+
+func estadoQuieto(tr *trio, empresa string) string {
+	e := tr.estado(empresa)
+	if e == nil {
+		return "sem estado"
+	}
+	e.Trava.Lock()
+	defer e.Trava.Unlock()
+	for _, r := range e.Reservas {
+		if r.Status == "confirmada" {
+			return "reserva confirmada"
+		}
+	}
+	for _, s := range e.Seguros {
+		if s.Estado == "segurado" || s.Estado == "esperando" || s.Estado == "confirmado" {
+			return "seguro " + s.Estado
+		}
+	}
+	for _, p := range e.Pedidos {
+		if p.Fase == "segurando" || p.Fase == "confirmando" || p.Fase == "abortando" || p.Fase == "cancelando" {
+			return "pedido " + p.Fase
+		}
+	}
+	return ""
+}
+
+func TestCargaComQueda(t *testing.T) {
+	tr := subirTrio(t, 20*time.Second, 40*time.Millisecond, time.Second)
+	defer tr.derrubar()
+	antesFeira := vagaBruta(tr, "vaijunto", "Salvador", "Feira de Santana")
+	antesSul := vagaBruta(tr, "sudoeste", "Feira de Santana", "Vitória da Conquista")
+	antesNorte := vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros")
+	empresas := []string{"vaijunto", "sudoeste", "norteminas"}
+	for _, emp := range empresas {
+		for i := 0; i < 6; i++ {
+			var cad Resposta
+			_, erro := Pedir("POST", tr.url(emp)+"/cadastrar", map[string]string{
+				"usuario": fmt.Sprintf("carga%s%d", emp, i),
+				"senha":   "123",
+				"papel":   "passageiro",
+			}, 3*time.Second, &cad)
+			if erro || !cad.OK {
+				t.Fatal("nao cadastrou", emp, i)
+			}
+		}
+	}
+	busca := buscarRota(tr.url("vaijunto"), "Salvador", "Montes Claros")
+	caminho := acharCaminho(busca.Itinerarios)
+	if caminho == nil {
+		t.Fatal("sem caminho")
+	}
+	fim := make(chan struct{}, 18)
+	for _, emp := range empresas {
+		for i := 0; i < 6; i++ {
+			go func(emp string, i int) {
+				var resp Resposta
+				Pedir("POST", tr.url(emp)+"/reservar", map[string]any{
+					"usuario": fmt.Sprintf("carga%s%d", emp, i),
+					"senha":   "123",
+					"trechos": caminho,
+				}, 12*time.Second, &resp)
+				fim <- struct{}{}
+			}(emp, i)
+		}
+	}
+	time.Sleep(30 * time.Millisecond)
+	tr.derrubarEmpresa("sudoeste")
+	for i := 0; i < 18; i++ {
+		<-fim
+	}
+	tr.reiniciar(t, "sudoeste")
+	limite := time.Now().Add(8 * time.Second)
+	for time.Now().Before(limite) {
+		limpo := true
+		for _, emp := range empresas {
+			if estadoQuieto(tr, emp) != "" {
+				limpo = false
+			}
+		}
+		if limpo {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	for _, emp := range empresas {
+		checar(t, estadoQuieto(tr, emp) == "", emp+" ficou sem reserva, preparacao ou pedido pendente")
+	}
+	checar(t, vagaBruta(tr, "vaijunto", "Salvador", "Feira de Santana") == antesFeira, "saldo da vaijunto voltou")
+	checar(t, vagaBruta(tr, "sudoeste", "Feira de Santana", "Vitória da Conquista") == antesSul, "saldo da sudoeste voltou")
+	checar(t, vagaBruta(tr, "norteminas", "Vitória da Conquista", "Montes Claros") == antesNorte, "saldo da norteminas voltou")
 }

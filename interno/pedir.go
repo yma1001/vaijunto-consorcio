@@ -13,6 +13,16 @@ import (
 // O bool true no fim significa queda: timeout, conexao recusada, cabo.
 // Isso e diferente de um 409, que e a outra empresa viva dizendo que nao tem vaga.
 func Pedir(metodo, url string, corpo any, timeout time.Duration, destino any) (int, bool) {
+	return pedir(metodo, url, "", "", corpo, timeout, destino)
+}
+
+// PedirComo e o Pedir com usuario e senha no cabecalho (HTTP Basic).
+// A senha nao vai na URL, entao o log do servidor nao mostra ela.
+func PedirComo(metodo, url, usuario, senha string, corpo any, timeout time.Duration, destino any) (int, bool) {
+	return pedir(metodo, url, usuario, senha, corpo, timeout, destino)
+}
+
+func pedir(metodo, url, usuario, senha string, corpo any, timeout time.Duration, destino any) (int, bool) {
 	var leitor io.Reader
 	if corpo != nil {
 		bruto, err := json.Marshal(corpo)
@@ -29,6 +39,9 @@ func Pedir(metodo, url string, corpo any, timeout time.Duration, destino any) (i
 	}
 	if corpo != nil {
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	}
+	if usuario != "" {
+		req.SetBasicAuth(usuario, senha)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
